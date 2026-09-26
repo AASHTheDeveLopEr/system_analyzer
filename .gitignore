@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Local AI tooling / spec workflow (not part of the app) ---
+.pi/
+.specify/
+specs/
