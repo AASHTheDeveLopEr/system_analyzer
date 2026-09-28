@@ -6,6 +6,7 @@ Run it:  python menu.py
 
 import os
 import platform
+import psutil
 
 
 def show_menu():
@@ -25,12 +26,40 @@ def show_specs():
     """Real detection moves to system_one.py later; this is just a first step."""
     print("\n--- detected ---")
     print(f"  OS     : {platform.system()} {platform.release()} ({platform.machine()})")
-    print(f"  CPU    : {platform.processor() or platform.machine()}")
-    print(f"  Cores  : {os.cpu_count()} logical")
     print(f"  Python : {platform.python_version()}")
-    print("  RAM    : not implemented yet")
-    print("  GPU    : not implemented yet")
+    
+    # RAM
+    ram = psutil.virtual_memory()
 
+    print("RAM Total:", ram.total)
+    print("RAM Used:", ram.used)
+    print("RAM Free:", ram.available)
+    print("RAM Usage:", ram.percent, "%")
+
+
+    # CPU
+    print("CPU Usage:", psutil.cpu_percent(interval=1), "%")
+    print("CPU Cores:", psutil.cpu_count())
+
+
+    # Disk
+    disk = psutil.disk_usage("/")
+
+    print("Disk Total:", disk.total)
+    print("Disk Used:", disk.used)
+    print("Disk Free:", disk.free)
+    print("Disk Usage:", disk.percent, "%")
+
+
+    # Network
+    network = psutil.net_io_counters()
+
+    print("Network Bytes Sent:", network.bytes_sent)
+    print("Network Bytes Received:", network.bytes_recv)
+
+
+    # GPU
+    print("GPU: not implemented yet")
 
 def rate_pc():
     print("\nRating is not built yet - system_one.py will do that.")
