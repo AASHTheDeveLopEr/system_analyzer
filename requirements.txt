@@ -1,0 +1,12 @@
+# Install with:  python -m pip install -r requirements.txt
+
+# Detection (all three are pure cross-platform Python wrappers)
+psutil>=5.9          # RAM, logical cores, disks
+py-cpuinfo>=9.0      # CPU brand name and speed
+nvidia-ml-py>=12.0  # NVIDIA GPUs, on Windows / Linux / macOS
+
+# The System One endpoints
+requests>=2.31
+
+# Optional: reads AMD and Intel GPUs on Windows, where pynvml cannot.
+wmi; sys_platform == "win32"
