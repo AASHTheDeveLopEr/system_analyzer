@@ -14,12 +14,10 @@ These are regression tests for real bugs, not coverage for its own sake:
 Run:  python -m unittest discover -s tests
 """
 
-from __future__ import annotations
-
 import os
+import types
 import unittest
 from unittest import mock
-
 import menu
 
 
@@ -57,40 +55,51 @@ def _raise(error):
     raise error
 
 
-class GpuDetectionTests(unittest.TestCase):
-    """The Windows path, which is where the crash lived."""
+def _fake_gpuinfo(name, vendor=None, memory_mb=None, source=None):
+    """Build a lightweight stand-in for gpu_detector.models.GPUInfo."""
+    info = types.SimpleNamespace(name=name, vendor=vendor, memory_mb=memory_mb)
+    info.source = source or (f"sysfs:/sys/class/drm" if vendor == "AMD" else "platform")
+    return info
 
-    def _windows(self, nvidia, windows_names):
-        # NB: `Mock(name=...)` sets the mock's label, not its `.name`
-        # attribute, so build it first and assign afterwards.
-        fake_os = mock.Mock()
-        fake_os.name = "nt"
+
+class GpuDetectionTests(unittest.TestCase):
+    """GPU detection across Windows, Linux, and macOS via gpu-detector."""
+
+    def _with_platform(self, nvidia, platform_infos, system_name="Windows"):
+        """Patch _nvidia_gpus and _detect_platform_gpus with controlled inputs."""
+        fake_platform = mock.Mock()
+        fake_platform.system = mock.Mock(return_value=system_name)
         return mock.patch.multiple(
-            menu, os=fake_os, _nvidia_gpus=mock.Mock(return_value=nvidia),
-            _windows_gpu_names=mock.Mock(return_value=windows_names),
+            menu,
+            _nvidia_gpus=mock.Mock(return_value=nvidia),
+            _detect_platform_gpus=mock.Mock(return_value=platform_infos),
+            platform=fake_platform,
         )
 
     def test_windows_non_nvidia_adapter_does_not_crash(self):
-        """The P0: pynvml finds nothing, Windows reports Intel graphics."""
-        with self._windows([], ["Intel(R) UHD Graphics 620"]):
+        """The P0: pynvml finds nothing, platform reports Intel graphics."""
+        intel = _fake_gpuinfo("Intel(R) UHD Graphics 620", vendor="Intel")
+        with self._with_platform([], [intel], system_name="Windows"):
             gpus = menu.detect_gpus()
 
         self.assertEqual(len(gpus), 1)
         self.assertEqual(gpus[0].name, "Intel(R) UHD Graphics 620")
-        self.assertEqual(gpus[0].source, "wmi")
+        self.assertEqual(gpus[0].source, "platform")
 
-    def test_windows_adapter_without_vram_is_unknown_not_zero(self):
+    def test_non_nvidia_adapter_without_vram_is_unknown_not_zero(self):
         """Shared memory is not a number we have, and guessing one is a lie."""
-        with self._windows([], ["Intel(R) UHD Graphics 620"]):
+        intel = _fake_gpuinfo("Intel(R) UHD Graphics 620", vendor="Intel")
+        with self._with_platform([], [intel], system_name="Windows"):
             gpus = menu.detect_gpus()
 
         self.assertIsNone(gpus[0].vram_bytes)
         self.assertIn("unknown", gpus[0].display())
 
-    def test_nvidia_and_windows_entries_do_not_duplicate(self):
-        """pynvml spells it 'NVIDIA GeForce ...', WMI often drops the prefix."""
-        card = menu.Gpu(name="NVIDIA GeForce RTX 3070", vram_bytes=8 * menu.GIB, source="nvml")
-        with self._windows([card], ["GeForce RTX 3070", "Intel(R) UHD Graphics 620"]):
+    def test_nvidia_and_platform_entries_do_not_duplicate(self):
+        """pynvml spells it 'NVIDIA GeForce ...', platform drops the prefix."""
+        nvidia_card = menu.Gpu(name="NVIDIA GeForce RTX 3070", vram_bytes=8 * menu.GIB, source="nvml")
+        intel = _fake_gpuinfo("Intel(R) UHD Graphics 620", vendor="Intel")
+        with self._with_platform([nvidia_card], [intel], system_name="Windows"):
             gpus = menu.detect_gpus()
 
         names = [gpu.name for gpu in gpus]
@@ -99,17 +108,48 @@ class GpuDetectionTests(unittest.TestCase):
 
     def test_software_adapters_are_dropped(self):
         """A VM has no real GPU, and the spec wants 'unknown' there (FR-002)."""
-        with self._windows([], ["Microsoft Basic Render Driver", "VMware SVGA 3D"]):
+        software1 = _fake_gpuinfo("Microsoft Basic Render Driver", vendor="Microsoft")
+        software2 = _fake_gpuinfo("VMware SVGA 3D", vendor="VMware")
+        with self._with_platform([], [software1, software2], system_name="Windows"):
             gpus = menu.detect_gpus()
 
         self.assertEqual(gpus, ())
 
-    def test_a_two_character_adapter_name_is_not_unpacked_into_vram(self):
-        """The silent-corruption variant of the same bug."""
-        with self._windows([], ["3D"]):
+    def test_virtual_vendor_adapters_are_dropped(self):
+        """gpu-detector vendor field marks these as virtual, not hardware (FR-002)."""
+        vmware = _fake_gpuinfo("VMware SVGA 3D", vendor="VMware")
+        qemu = _fake_gpuinfo("QXL", vendor="QEMU/Bochs")
+        with self._with_platform([], [vmware, qemu], system_name="Linux"):
             gpus = menu.detect_gpus()
 
+        self.assertEqual(gpus, ())
+
+    def test_linux_amd_gpu_with_vram(self):
+        """On Linux, AMD VRAM from sysfs is trusted and converted to bytes."""
+        amd = _fake_gpuinfo("AMD Radeon RX 7800 XT", vendor="AMD",
+                            memory_mb=16384, source="sysfs:/sys/class/drm")
+        with self._with_platform([], [amd], system_name="Linux"):
+            gpus = menu.detect_gpus()
+
+        self.assertEqual(len(gpus), 1)
+        self.assertEqual(gpus[0].name, "AMD Radeon RX 7800 XT")
+        self.assertEqual(gpus[0].vram_bytes, 16384 * menu.MIB)
+        self.assertEqual(gpus[0].source, "sysfs")
+        self.assertEqual(gpus[0].note, "")
+
+    def test_macos_intel_gpu_without_dedicated_vram(self):
+        """On macOS, shared-memory VRAM from system_profiler is not trusted."""
+        intel = _fake_gpuinfo("Intel Iris Xe Graphics", vendor="Intel",
+                            memory_mb=1536, source="system_profiler:SPDisplaysDataType -json")
+        with self._with_platform([], [intel], system_name="Darwin"):
+            gpus = menu.detect_gpus()
+
+        self.assertEqual(len(gpus), 1)
+        self.assertEqual(gpus[0].name, "Intel Iris Xe Graphics")
+        # macOS VRAM is not trusted -> None
         self.assertIsNone(gpus[0].vram_bytes)
+        self.assertEqual(gpus[0].source, "platform")
+        self.assertIn("dedicated", gpus[0].note)
 
 
 class NvmlTests(unittest.TestCase):

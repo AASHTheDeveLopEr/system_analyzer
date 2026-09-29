@@ -4,9 +4,11 @@
 Run it:  python menu.py
 
 Detection is done by libraries, not by hand: psutil for RAM and disks,
-py-cpuinfo for the CPU, pynvml (and wmi on Windows) for GPUs. Anything a
-library cannot read is recorded as ``None`` and printed as "unknown" instead of
-being guessed, so a blocked or missing API can never crash the tool.
+py-cpuinfo for the CPU, pynvml for NVIDIA GPUs on any OS, and gpu-detector
+(which wraps lspci, /sys/class/drm, system_profiler, WMI/WMIC) for AMD/Intel/
+Apple GPUs. Anything a library cannot read is recorded as ``None`` and printed
+as "unknown" instead of being guessed, so a blocked or missing API can never
+crash the tool.
 
 The detectors return records (bytes and counts), never display strings, and
 formatting happens at the edge. The decision layer needs the numbers -- "8 GiB
@@ -74,9 +76,11 @@ class Gpu:
 
     ``source`` says where the name came from -- ``nvml`` (an NVIDIA driver
     answered, so the card is real and its VRAM figure is driver-reported) or
-    ``wmi`` (Windows' own adapter list). Prefer ``nvml`` cards when a judgment
-    needs the strongest adapter; ``wmi``-only entries are usually integrated
-    graphics, but nothing here claims that, because nothing here can see it.
+    ``platform`` (gpu-detector found the card on Windows WMI, Linux /sys/class/
+    drm, or macOS system_profiler, but VRAM is not trusted from those paths).
+    Prefer ``nvml`` cards when a judgment needs the strongest adapter;
+    ``platform``-only entries are usually integrated graphics, but nothing
+    here claims that, because nothing here can see it.
     """
 
     name: str
@@ -235,10 +239,10 @@ def detect_disks() -> tuple[Disk, ...]:
         )
     return tuple(disks)
 
-
-# Windows reports these for VMs and remote sessions. They are not hardware, and
-# the spec wants an unknown field there rather than an invented GPU.
+# Virtual and software-only adapters across platforms. They are not hardware,
+# and the spec wants an unknown field there rather than an invented GPU (FR-002).
 SOFTWARE_ADAPTERS = (
+    # Windows virtual / remote
     "basic render driver",
     "remote display adapter",
     "indirect display",
@@ -250,37 +254,104 @@ SOFTWARE_ADAPTERS = (
     "parallels",
     "qxl",
     "bochs",
+    # Linux virtual
+    "llvmpipe",
+    "softpipe",
+    "swrast",
+    "virtual",
+    # macOS software / virtual
+    "apple software",
+    "displaylink",
 )
 
-# Why a WMI-only adapter has no VRAM number. Windows' AdapterRAM is a 32-bit
-# field: it wraps above 4 GiB, so a 24 GB card reads as 0. Reporting a wrong
-# number is worse than reporting none.
-WMI_NO_VRAM = "Windows exposes only a 32-bit size for this adapter"
+# Vendors that gpu-detector reports as virtual or software rather than real
+# hardware. Cards from these vendors are filtered out (FR-002).
+VIRTUAL_VENDORS = frozenset({
+    "VMware", "Red Hat", "QEMU/Bochs", "VirtualBox",
+})
+
+# Why a non-NVIDIA platform-detected adapter has no VRAM number. The Windows
+# WMI AdapterRAM is a 32-bit field that wraps above 4 GiB; macOS often reports
+# shared memory as VRAM. We only trust VRAM from pynvml (NVIDIA) or Linux DRM
+# sysfs (AMD dedicated VRAM), so adapters from other paths are unknown.
+NO_VRAM_NOTE = (
+    "platform API did not report dedicated VRAM for this adapter"
+)
 
 
 def _is_software_adapter(name: str) -> bool:
+    """True if *name* looks like a virtual or software-only GPU, not real hardware."""
     lowered = name.lower()
     return any(marker in lowered for marker in SOFTWARE_ADAPTERS)
 
 
 def detect_gpus() -> tuple[Gpu, ...]:
-    """Every real GPU, pynvml first, then Windows' own list for the rest.
+    """Every real GPU on this machine, across NVIDIA and the host platform.
 
-    pynvml reads NVIDIA cards on any OS and is the only source here that
-    reports VRAM honestly, so it goes first and the Windows pass only adds
-    adapters pynvml did not name.
+    pynvml reads NVIDIA cards on any OS and reports VRAM most reliably, so it
+    goes first and its entries are preferred. ``gpu-detector`` then fills the
+    gap for AMD, Intel, and other vendors on Linux, Windows (WMI), and macOS
+    (system_profiler). Software and virtual adapters are filtered out (FR-002).
     """
-    cards = list(_nvidia_gpus())
-    if os.name == "nt":
-        known = [_normalize(gpu.name) for gpu in cards]
-        for name in _windows_gpu_names():
-            if _is_software_adapter(name):
-                continue
-            if any(_normalize(name) in seen or seen in _normalize(name) for seen in known):
-                continue  # pynvml already reported this one, spelled differently
-            cards.append(Gpu(name=name, vram_bytes=None, source="wmi", note=WMI_NO_VRAM))
-            known.append(_normalize(name))
+    cards = _nvidia_gpus()
+    known = [_normalize(gpu.name) for gpu in cards]
+    for name, vram_bytes, source, note in _platform_gpu_results():
+        if _is_software_adapter(name):
+            continue
+        normalized = _normalize(name)
+        if any(normalized in seen or seen in normalized for seen in known):
+            continue  # pynvml already reported this one, spelled differently
+        cards.append(Gpu(name=name, vram_bytes=vram_bytes, source=source, note=note))
+        known.append(normalized)
     return tuple(cards)
+
+
+def _platform_gpu_results() -> list[tuple[str, int | None, str, str]]:
+    """Non-NVIDIA GPUs from gpu-detector, filtered for software adapters.
+
+    Returns a list of ``(name, vram_bytes, source, note)`` tuples. VRAM is only
+    populated from Linux DRM sysfs (``mem_info_vram_total`` or PCI BAR sizes)
+    where the driver genuinely reports dedicated memory. On macOS and Windows
+    the VRAM from the OS API is not trusted (shared memory, 32-bit wraparound),
+    so it stays ``None`` with an explanatory note.
+    """
+    info_list = _detect_platform_gpus()
+    results: list[tuple[str, int | None, str, str]] = []
+    is_linux = platform.system() == "Linux"
+    for info in info_list:
+        if info.vendor is not None and info.vendor in VIRTUAL_VENDORS:
+            continue
+        vram_mb = info.memory_mb
+        if vram_mb is not None and is_linux:
+            # On Linux, gpu-detector reads mem_info_vram_total (AMD) or the
+            # largest PCI BAR, both of which are honest dedicated-VRAM numbers.
+            vram_bytes = vram_mb * MIB
+            source = "sysfs" if info.source and "sysfs" in info.source else info.source or "platform"
+            note = ""
+        else:
+            # macOS and Windows: VRAM is not trusted (see NO_VRAM_NOTE above).
+            vram_bytes = None
+            source = "platform"
+            note = NO_VRAM_NOTE
+        results.append((info.name, vram_bytes, source, note))
+    return results
+
+
+def _detect_platform_gpus() -> list:
+    """Call gpu-detector to enumerate all GPUs; return raw GPUInfo list.
+
+    gpu-detector tries ``lspci`` then ``/sys/class/drm`` on Linux,
+    ``system_profiler`` on macOS, and PowerShell/WMIC on Windows. Returns an
+    empty list if the library is not installed or the platform API fails.
+    """
+    try:
+        from gpu_detector import detect as _detect
+    except ImportError:
+        return []  # optional dependency; not all installs have it
+    try:
+        return _detect()
+    except Exception:  # noqa: BLE001 - any failure here is "no data"
+        return []
 
 
 def _normalize(name: str) -> str:
@@ -290,7 +361,11 @@ def _normalize(name: str) -> str:
 
 
 def _nvidia_gpus() -> list[Gpu]:
-    """(name, vram) for each NVIDIA card; empty if there is none or no driver."""
+    """(name, vram) for each NVIDIA card; empty if there is none or no driver.
+
+    pynvml reads NVIDIA cards on any OS and is the only source that reports
+    VRAM honestly across platforms, so NVIDIA always goes through here.
+    """
     try:
         pynvml.nvmlInit()
     except pynvml.NVMLError:
@@ -323,19 +398,6 @@ def _nvidia_gpus() -> list[Gpu]:
     finally:
         with contextlib.suppress(pynvml.NVMLError):
             pynvml.nvmlShutdown()
-
-
-def _windows_gpu_names() -> list[str]:
-    """Names of every display adapter Windows knows, or an empty list."""
-    try:
-        import wmi
-    except ImportError:
-        return []  # optional dependency, not installed
-
-    try:
-        return [card.Name for card in wmi.WMI().Win32_VideoController() if card.Name]
-    except Exception:  # noqa: BLE001 - WMI raises bare exceptions when disabled
-        return []
 
 
 def detect_inventory() -> Inventory:

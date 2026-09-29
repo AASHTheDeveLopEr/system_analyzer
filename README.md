@@ -27,22 +27,29 @@ python -m pip install -r requirements.txt
 
 Detection is delegated to libraries rather than hand-rolled: `psutil` (RAM,
 cores, disks), `py-cpuinfo` (CPU name/speed), `pynvml` (NVIDIA GPUs on any OS,
-`wmi` as the AMD/Intel fallback on Windows), `requests` for the API calls.
-Anything a library cannot read is reported as `unknown`, never guessed.
+reports VRAM most reliably), `gpu-detector` (AMD/Intel/Apple GPUs on Linux,
+Windows, and macOS), `requests` for the API calls. Anything a library cannot
+read is reported as `unknown`, never guessed.
 
 On RAM, GPU and VRAM specifically:
 
 - **RAM** is reported as *total* and *available* (not "free", which would
   exclude reclaimable cache and badly understate what is actually usable).
-- **VRAM** is only reported when a driver reports it. Integrated adapters that
-  share system memory are listed as `unknown` rather than as the shared
-  amount, because shared memory is not capacity the machine owns.
-- On Windows, `wmi`'s `AdapterRAM` is **not** used: it is a 32-bit field that
-  wraps above 4 GB, which reports a 8 GB card as 0.
-- Virtual adapters (VMware, VirtualBox, Hyper-V, basic render drivers) are
-  dropped, so a VM does not get a fictional GPU.
-- One unreadable GPU does not hide the others: each card is queried on its own,
-  and a card that fails is kept with its VRAM marked unknown.
+- **VRAM** is only reported when a driver genuinely exposes dedicated memory.
+  Integrated adapters that share system memory are listed as `unknown` rather
+  than as the shared amount, because shared memory is not capacity the machine
+  owns.
+- On Windows, `wmi`'s `AdapterRAM` is **not** used for VRAM: it is a 32-bit
+  field that wraps above 4 GB, which reports a 8 GB card as 0. VRAM on Windows
+  comes from pynvml (NVIDIA only); other adapters show names but VRAM unknown.
+- On Linux, VRAM for AMD GPUs comes from the driver's `mem_info_vram_total` in
+  `/sys/class/drm`. Intel integrated graphics have no dedicated VRAM file, so
+  VRAM stays `unknown`.
+
+- On macOS, `system_profiler` reports GPU names; dedicated VRAM is only counted
+  when the OS exposes it as such (not shared-system-memory).
+- Virtual adapters (VMware, VirtualBox, Hyper-V, basic render drivers, llvmpipe,
+  swrast, etc.) are dropped, so a VM does not get a fictional GPU.
 
 ## Running
 
