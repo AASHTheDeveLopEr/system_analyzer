@@ -14,6 +14,9 @@ The detectors return records (bytes and counts), never display strings, and
 formatting happens at the edge. The decision layer needs the numbers -- "8 GiB
 of dedicated VRAM" and "8 GiB of shared system RAM" are the same digits and two
 very different answers to "can I run X?".
+
+CPU and RAM usage are live readings taken for the local display: they describe
+this moment, not the machine, so they stay out of the state sent to the model.
 """
 
 from __future__ import annotations
@@ -34,6 +37,12 @@ GHZ = 1e9
 
 UNKNOWN = "unknown"
 
+#: How long the CPU-usage sample runs. ``psutil.cpu_percent()`` with no
+#: interval returns a placeholder 0.0 on its first call in a process, so a
+#: real (short) window is the only honest way to take the reading without
+#: making the user wait a full second for it.
+CPU_SAMPLE_SECONDS = 0.1
+
 
 def _format_size(num_bytes: int) -> str:
     """Human size that keeps sub-GiB values readable (512 MiB beats 0.5 GiB)."""
@@ -53,6 +62,7 @@ class Memory:
 
     total_bytes: int | None = None
     available_bytes: int | None = None
+    used_percent: float | None = None
 
     def display(self) -> str:
         if self.total_bytes is None:
@@ -62,7 +72,10 @@ class Memory:
             return f"{total} total"
         # "available" is what a new process can actually claim, which is not
         # the same as the "free" figure: the OS cache counts as available.
-        return f"{total} total, {_format_size(self.available_bytes)} available"
+        text = f"{total} total, {_format_size(self.available_bytes)} available"
+        if self.used_percent is not None:
+            text += f" ({self.used_percent:.0f}% used)"
+        return text
 
 
 @dataclass(frozen=True)
@@ -132,6 +145,7 @@ class Inventory:
     cpu_name: str = UNKNOWN
     cpu_cores: int | None = None
     cpu_ghz: float | None = None
+    cpu_usage_percent: float | None = None
     memory: Memory = Memory()
     gpus: tuple[Gpu, ...] = ()
     disks: tuple[Disk, ...] = ()
@@ -144,11 +158,16 @@ class Inventory:
             cpu = f"{cpu} @ {self.cpu_ghz:.1f} GHz"
         gpus = ", ".join(gpu.display() for gpu in self.gpus) if self.gpus else UNKNOWN
         disks = ", ".join(disk.display() for disk in self.disks) if self.disks else UNKNOWN
-        cores = f"{self.cpu_cores} logical" if self.cpu_cores else UNKNOWN
+        # The CPU's live reading rides with its core count: "23% busy" needs
+        # the number of cores next to it to mean anything.
+        cores = [f"{self.cpu_cores} logical"] if self.cpu_cores else []
+        if self.cpu_usage_percent is not None:
+            cores.append(f"{self.cpu_usage_percent:.0f}% busy")
+        cores_text = ", ".join(cores) if cores else UNKNOWN
         return [
             ("OS", self.os_name),
             ("CPU", cpu),
-            ("Cores", cores),
+            ("Cores", cores_text),
             ("RAM", self.memory.display()),
             ("GPU", gpus),
             ("Disks", disks),
@@ -160,7 +179,8 @@ class Inventory:
 
         Every field is present even when it is ``None``, so a missing reading
         stays visible as unknown instead of quietly becoming a zero the model
-        would reason about (FR-002).
+        would reason about (FR-002). Live usage readings are deliberately
+        absent: they describe the moment, not the machine.
         """
         return {
             "operating_system": self.os_name,
@@ -211,12 +231,30 @@ def detect_cpu() -> tuple[str, int | None, float | None]:
     return name, cores, (hz / GHZ if hz else None)
 
 
+def detect_cpu_usage() -> float | None:
+    """CPU busy percentage over a short real window; ``None`` if unreadable.
+
+    ``psutil.cpu_percent()`` with no interval returns a placeholder 0.0 on its
+    first call in a process -- there is no earlier sample to compare against --
+    and printing that as "0% busy" would be an invented reading. A real
+    interval, kept short, is the honest way to take one.
+    """
+    try:
+        return psutil.cpu_percent(interval=CPU_SAMPLE_SECONDS)
+    except (psutil.Error, OSError):
+        return None
+
+
 def detect_memory() -> Memory:
     try:
         memory = psutil.virtual_memory()
     except (psutil.Error, OSError):
         return Memory()
-    return Memory(total_bytes=memory.total, available_bytes=memory.available)
+    return Memory(
+        total_bytes=memory.total,
+        available_bytes=memory.available,
+        used_percent=memory.percent,
+    )
 
 
 def detect_disks() -> tuple[Disk, ...]:
@@ -408,6 +446,7 @@ def detect_inventory() -> Inventory:
         cpu_name=cpu_name,
         cpu_cores=cores,
         cpu_ghz=ghz,
+        cpu_usage_percent=detect_cpu_usage(),
         memory=detect_memory(),
         gpus=detect_gpus(),
         disks=detect_disks(),

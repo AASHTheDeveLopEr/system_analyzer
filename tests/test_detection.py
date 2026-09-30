@@ -204,6 +204,27 @@ class MemoryTests(unittest.TestCase):
         """psutil's 'available' includes reclaimable cache; 'free' would be wrong."""
         self.assertIn("available", menu.Memory(menu.GIB, menu.GIB).display())
 
+    def test_live_usage_is_shown_with_the_capacity(self):
+        memory = menu.Memory(
+            total_bytes=8 * menu.GIB, available_bytes=2 * menu.GIB, used_percent=75.0
+        )
+        self.assertEqual(memory.display(), "8.0 GiB total, 2.0 GiB available (75% used)")
+
+    def test_a_missing_usage_reading_is_not_shown_as_zero(self):
+        """No reading means no number; a measured zero is still a number."""
+        no_reading = menu.Memory(total_bytes=8 * menu.GIB, available_bytes=2 * menu.GIB)
+        measured_zero = menu.Memory(
+            total_bytes=8 * menu.GIB, available_bytes=8 * menu.GIB, used_percent=0.0
+        )
+        self.assertNotIn("used", no_reading.display())
+        self.assertIn("(0% used)", measured_zero.display())
+
+    def test_detection_carries_the_usage_reading(self):
+        fake = mock.Mock(total=16 * menu.GIB, available=12 * menu.GIB, percent=25.0)
+        with mock.patch.object(menu.psutil, "virtual_memory", return_value=fake):
+            memory = menu.detect_memory()
+        self.assertEqual(memory.used_percent, 25.0)
+
     def test_small_sizes_stay_readable(self):
         self.assertEqual(menu._format_size(512 * menu.MIB), "512 MiB")
         self.assertEqual(menu._format_size(menu.GIB), "1.0 GiB")
@@ -257,6 +278,15 @@ class PrivacyTests(unittest.TestCase):
     def test_memory_is_gib(self):
         self.assertEqual(self._state()["memory"]["total_gib"], 32.0)
 
+    def test_live_readings_stay_out_of_the_payload(self):
+        """Usage describes the moment, not the machine, so it never ships."""
+        state = menu.Inventory(
+            cpu_usage_percent=23.4,
+            memory=menu.Memory(8 * menu.GIB, 2 * menu.GIB, 75.0),
+        ).to_state()
+        self.assertEqual(set(state["cpu"]), {"name", "logical_cores", "clock_ghz"})
+        self.assertEqual(set(state["memory"]), {"total_gib", "available_gib"})
+
 
 class MenuTests(unittest.TestCase):
     def test_cpu_detection_survives_a_broken_cpuinfo(self):
@@ -282,9 +312,29 @@ class MenuTests(unittest.TestCase):
             _name, _cores, ghz = menu.detect_cpu()
         self.assertIsNone(ghz)
 
+    def test_cpu_usage_comes_from_a_real_sample_window(self):
+        """The no-interval call returns a placeholder 0.0 on its first use, and
+        a placeholder printed as "0% busy" would be an invented reading."""
+        with mock.patch.object(menu.psutil, "cpu_percent", return_value=23.4) as percent:
+            self.assertEqual(menu.detect_cpu_usage(), 23.4)
+        self.assertIsNotNone(percent.call_args.kwargs.get("interval"))
+
+    def test_unreadable_cpu_usage_is_none_not_zero(self):
+        blocked = menu.psutil.Error("no access")
+        with mock.patch.object(menu.psutil, "cpu_percent", side_effect=blocked):
+            self.assertIsNone(menu.detect_cpu_usage())
+
     def test_specs_lines_have_one_row_per_component(self):
         labels = [label for label, _value in menu.Inventory().lines()]
         self.assertEqual(labels, ["OS", "CPU", "Cores", "RAM", "GPU", "Disks", "Python"])
+
+    def test_the_cores_line_carries_the_live_reading(self):
+        lines = dict(menu.Inventory(cpu_cores=16, cpu_usage_percent=23.4).lines())
+        self.assertEqual(lines["Cores"], "16 logical, 23% busy")
+
+    def test_the_cores_line_has_no_number_when_nothing_was_read(self):
+        lines = dict(menu.Inventory(cpu_cores=16).lines())
+        self.assertEqual(lines["Cores"], "16 logical")
 
     def test_get_specs_is_a_mapping_of_strings(self):
         specs = menu.get_specs()

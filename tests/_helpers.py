@@ -132,7 +132,10 @@ def sample_inventory(**overrides: Any) -> Any:
         cpu_name="AMD Ryzen 5 3600",
         cpu_cores=6,
         cpu_ghz=3.6,
-        memory=menu.Memory(total_bytes=16 * 1024 ** 3, available_bytes=9 * 1024 ** 3),
+        cpu_usage_percent=14.0,
+        memory=menu.Memory(
+            total_bytes=16 * 1024 ** 3, available_bytes=9 * 1024 ** 3, used_percent=43.8
+        ),
         gpus=(menu.Gpu("NVIDIA RTX 3060", 12 * 1024 ** 3, "nvml"),),
         disks=(menu.Disk("/home", 1024 * 1024 ** 3, 400 * 1024 ** 3, 60.0),),
         python_version="3.14.6",
