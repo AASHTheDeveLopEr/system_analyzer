@@ -107,7 +107,7 @@ sends it as a 0–1 fraction.
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 169 offline tests, no network
+python -m unittest discover -s tests          # 179 offline tests, no network (10 opt-in live skipped)
 python system_one.py --selftest               # the decision layer, verbose
 ```
 

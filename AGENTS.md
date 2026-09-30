@@ -55,7 +55,7 @@ A terminal-only Python application that detects this machine's hardware specs (C
 - Use `contextlib.suppress(...)` for cleanup paths (e.g., `pynvml.nvmlShutdown()`)
 
 ### Testing
-- **Offline-first:** `python -m unittest discover -s tests` runs 169 tests with no network
+- **Offline-first:** `python -m unittest discover -s tests` runs 179 tests with no network (10 opt-in live tests skipped)
 - **Live tests opt-in:** `SYSTEM_ANALYZER_LIVE_TESTS=1 python -m unittest tests.test_live_jev`
 - Tests use `unittest.mock` to patch hardware — never test against real hardware in CI
 - Follow existing test structure: class-per-concern, descriptive method names
@@ -78,10 +78,10 @@ EXIT_UNGROUNDED = 4  # specs cannot determine the question
 ```
 
 ### Data Flow Conventions
-- GPU detection: **pynvml first** (cross-platform, reports VRAM honestly), **Windows WMI as fallback** for non-NVIDIA adapters. Integrated GPUs that share system memory are listed as `unknown` VRAM, not the shared amount.
+- GPU detection: **pynvml first** (cross-platform, reports VRAM honestly), **gpu-detector as fallback** for non-NVIDIA adapters (Windows WMI, Linux lspci/sysfs, macOS system_profiler). Integrated GPUs that share system memory are listed as `unknown` VRAM, not the shared amount. Linux DRM sysfs VRAM is trusted; macOS/Windows platform VRAM is not.
 - Software adapters (VM, remote, basic render drivers) are dropped via `SOFTWARE_ADAPTERS` filter
-- Deduplicated by normalized name (`_normalize()`) to avoid double-counting cards pynvml and WMI both see
-- The `Gpu.source` field says where the name came from: `"nvml"` (strongest — driver-reported VRAM) or `"wmi"` (name only)
+- Deduplicated by normalized name (`_normalize()`) to avoid double-counting cards pynvml and gpu-detector both see
+- The `Gpu.source` field says where the name came from: `"nvml"` (strongest — driver-reported VRAM) or `"platform"`/`"sysfs"` (name only, except Linux DRM sysfs VRAM which is trusted)
 
 ## Exit Codes
 

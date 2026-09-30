@@ -33,7 +33,7 @@ class DefaultsTests(unittest.TestCase):
             self.assertEqual(curve[0][1], 0.0)
             self.assertEqual(curve[-1][1], 100.0)
 
-    def test_the_creves_only_ever_climb(self) -> None:
+    def test_the_curves_only_ever_climb(self) -> None:
         for name in ("cpu", "memory", "gpu", "storage"):
             scores = [y for _x, y in self.config.curve(name)]
             self.assertEqual(scores, sorted(scores), f"{name} curve goes downhill")

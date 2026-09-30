@@ -329,8 +329,8 @@ class DefaultEndpointTests(unittest.TestCase):
     """Pins the standing decision: Jev free is OpenCode's free model, remotely.
 
     Adding a local provider is not a bug, so this test failing means the
-    decision changed on purpose -- update it, this file and the hand-off
-    together rather than deleting the test.
+    decision changed on purpose -- update it and this file together
+    rather than deleting the test.
     """
 
     def setUp(self):
