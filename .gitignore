@@ -221,3 +221,10 @@ __marimo__/
 .pi/
 .specify/
 specs/
+.workbuddy-ai/
+
+# --- This app's own runtime files ---
+# The question log the CLI keeps by default (SYSTEM_ANALYZER_HISTORY to move it).
+history.json
+# Scratch directories the test suite creates and removes.
+.test-tmp-*/

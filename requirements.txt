@@ -1,0 +1,10 @@
+# Install with:  python -m pip install -r requirements.txt
+
+# Detection: pure Python wrappers, cross-platform.
+psutil>=5.9          # RAM, logical cores, disks
+py-cpuinfo>=9.0      # CPU brand name and speed
+nvidia-ml-py>=12.0   # NVIDIA GPUs on any OS (reports VRAM most reliably)
+gpu-detector>=1.0    # AMD/Intel/Apple GPUs on Linux, macOS, and Windows (WMI)
+
+# The System One endpoints
+requests>=2.31
