@@ -111,7 +111,8 @@ python -m unittest discover -s tests          # 179 offline tests, no network (1
 python system_one.py --selftest               # the decision layer, verbose
 ```
 
-The live contract tests are opt-in, because they call a real endpoint:
+The live contract tests are opt-in, because they call a real endpoint.
+Verified passing (10/10, 2026-09-30):
 
 ```bash
 SYSTEM_ANALYZER_LIVE_TESTS=1 python -m unittest tests.test_live_jev
