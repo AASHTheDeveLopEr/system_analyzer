@@ -20,6 +20,9 @@ import unittest
 import uuid
 from pathlib import Path
 from typing import Any
+from unittest import mock
+
+import settings
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -30,6 +33,10 @@ class TempDir(unittest.TestCase):
     ``tempfile`` is deliberately not used: its temp dir is not writable on every
     machine this runs on, and a test suite that cannot write its own fixtures
     is a suite that quietly stops testing.
+
+    The settings layer is pointed at the scratch directory too, so a
+    ``config.json`` or ``.env`` left in the repo by a real setup run cannot
+    leak into what a test asserts.
     """
 
     def setUp(self) -> None:
@@ -37,8 +44,13 @@ class TempDir(unittest.TestCase):
         self._tmp = REPO / f".test-tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         self._tmp.mkdir(parents=True, exist_ok=True)
         self.tmp = self._tmp
+        self._settings_env = mock.patch.dict(
+            os.environ, {settings.SETTINGS_DIR_ENV: str(self._tmp)}
+        )
+        self._settings_env.start()
 
     def tearDown(self) -> None:
+        self._settings_env.stop()
         shutil.rmtree(self._tmp, ignore_errors=True)
         super().tearDown()
 
@@ -48,17 +60,39 @@ class TempDir(unittest.TestCase):
         return path
 
 
+class IsolatedSettings(unittest.TestCase):
+    """A scratch settings directory for tests that do not want a TempDir."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._settings_tmp = REPO / f".test-tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        self._settings_tmp.mkdir(parents=True, exist_ok=True)
+        patcher = mock.patch.dict(
+            os.environ, {settings.SETTINGS_DIR_ENV: str(self._settings_tmp)}
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(shutil.rmtree, self._settings_tmp, True)
+
+
 class FakeClient:
     """Returns the answers it is handed, and records what it was asked.
 
     ``answers`` maps a question id to the answer body the real endpoint would
     return. ``error`` makes every call fail, which is how the rule-only
-    fallback is exercised.
+    fallback is exercised. ``providers`` mirrors the real client's endpoint
+    list, so the CLI's "asking ..." progress line can be tested.
     """
 
-    def __init__(self, answers: dict[str, dict[str, Any]] | None = None, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        answers: dict[str, dict[str, Any]] | None = None,
+        error: Exception | None = None,
+        providers: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.answers = answers or {}
         self.error = error
+        self.providers = providers or []
         self.calls: list[dict[str, Any]] = []
 
     def ask(self, state: Any, questions: dict[str, Any]) -> Any:
@@ -125,22 +159,22 @@ def capability_answers(
 
 def sample_inventory(**overrides: Any) -> Any:
     """A small but complete machine, built without touching the real hardware."""
-    import menu
+    import inventory
 
-    inventory = menu.Inventory(
+    machine = inventory.Inventory(
         os_name="Linux 6.1 (x86_64)",
         cpu_name="AMD Ryzen 5 3600",
         cpu_cores=6,
         cpu_ghz=3.6,
         cpu_usage_percent=14.0,
-        memory=menu.Memory(
+        memory=inventory.Memory(
             total_bytes=16 * 1024 ** 3, available_bytes=9 * 1024 ** 3, used_percent=43.8
         ),
-        gpus=(menu.Gpu("NVIDIA RTX 3060", 12 * 1024 ** 3, "nvml"),),
-        disks=(menu.Disk("/home", 1024 * 1024 ** 3, 400 * 1024 ** 3, 60.0),),
+        gpus=(inventory.Gpu("NVIDIA RTX 3060", 12 * 1024 ** 3, "nvml"),),
+        disks=(inventory.Disk("/home", 1024 * 1024 ** 3, 400 * 1024 ** 3, 60.0),),
         python_version="3.14.6",
     )
     if not overrides:
-        return inventory
-    fields = {**{f: getattr(inventory, f) for f in inventory.__dataclass_fields__}, **overrides}
-    return menu.Inventory(**fields)
+        return machine
+    fields = {**{f: getattr(machine, f) for f in machine.__dataclass_fields__}, **overrides}
+    return inventory.Inventory(**fields)

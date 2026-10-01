@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import unittest
 
-import menu
-import system_one
+import inventory
+import judgment
 from config import Config
-from system_one import ComponentScore, SystemOneError, rate_system, rules_rating
+from system_one import SystemOneError
+from judgment import ComponentScore, rate_system, rules_rating
 from tests._helpers import FakeClient, sample_inventory, score
 
 
@@ -28,35 +29,35 @@ def rating_answers(score_value: float, legend: dict | None = None) -> dict:
 class CurveTests(unittest.TestCase):
     def test_a_value_below_the_first_anchor_is_the_first_score(self) -> None:
         curve = Config().curve("cpu")
-        self.assertEqual(system_one._curve_score(curve, 0), curve[0][1])
-        self.assertEqual(system_one._curve_score(curve, -99), curve[0][1])
+        self.assertEqual(judgment._curve_score(curve, 0), curve[0][1])
+        self.assertEqual(judgment._curve_score(curve, -99), curve[0][1])
 
     def test_a_value_above_the_last_anchor_is_the_last_score(self) -> None:
         curve = Config().curve("memory")
-        self.assertEqual(system_one._curve_score(curve, 10_000), curve[-1][1])
+        self.assertEqual(judgment._curve_score(curve, 10_000), curve[-1][1])
 
     def test_interpolation_is_monotonic(self) -> None:
         curve = Config().curve("gpu")
-        scores = [system_one._curve_score(curve, v / 2) for v in range(0, 60)]
+        scores = [judgment._curve_score(curve, v / 2) for v in range(0, 60)]
         self.assertEqual(scores, sorted(scores))
 
     def test_an_unknown_value_scores_nothing_rather_than_zero(self) -> None:
         # Zero is a real, terrible score. Unknown is not the same thing, and
         # conflating them would quietly punish machines we failed to read.
-        self.assertIsNone(system_one._curve_score(Config().curve("cpu"), None))
+        self.assertIsNone(judgment._curve_score(Config().curve("cpu"), None))
 
 
 class ComponentScoreTests(unittest.TestCase):
     def test_a_good_machine_scores_worse_than_a_bad_one(self) -> None:
-        good = {c.name: c for c in system_one.component_scores(sample_inventory())}
+        good = {c.name: c for c in judgment.component_scores(sample_inventory())}
         bad = {
             c.name: c
-            for c in system_one.component_scores(
+            for c in judgment.component_scores(
                 sample_inventory(
                     cpu_cores=2,
-                    memory=menu.Memory(4 * 1024**3, 2 * 1024**3),
-                    gpus=(menu.Gpu("NVIDIA GTX 750 Ti", 2 * 1024**3, "nvml"),),
-                    disks=(menu.Disk("/", 64 * 1024**3, 256 * 1024**3, 75.0),),
+                    memory=inventory.Memory(4 * 1024**3, 2 * 1024**3),
+                    gpus=(inventory.Gpu("NVIDIA GTX 750 Ti", 2 * 1024**3, "nvml"),),
+                    disks=(inventory.Disk("/", 64 * 1024**3, 256 * 1024**3, 75.0),),
                 )
             )
         }
@@ -66,8 +67,8 @@ class ComponentScoreTests(unittest.TestCase):
     def test_a_software_adapter_is_unknown_not_zero(self) -> None:
         scores = {
             c.name: c
-            for c in system_one.component_scores(
-                sample_inventory(gpus=(menu.Gpu("Intel UHD 770", None, "software"),))
+            for c in judgment.component_scores(
+                sample_inventory(gpus=(inventory.Gpu("Intel UHD 770", None, "software"),))
             )
         }
         self.assertFalse(scores["GPU"].known)
@@ -75,7 +76,7 @@ class ComponentScoreTests(unittest.TestCase):
 
     def test_no_adapter_at_all_says_so_plainly(self) -> None:
         scores = {
-            c.name: c for c in system_one.component_scores(sample_inventory(gpus=()))
+            c.name: c for c in judgment.component_scores(sample_inventory(gpus=()))
         }
         self.assertFalse(scores["GPU"].known)
         self.assertIn("no display adapter", scores["GPU"].detail)
@@ -86,34 +87,34 @@ class ComponentScoreTests(unittest.TestCase):
         # integrated machines look like they had a graphics card.
         scores = {
             c.name: c
-            for c in system_one.component_scores(
+            for c in judgment.component_scores(
                 sample_inventory(
-                    memory=menu.Memory(32 * 1024**3, 16 * 1024**3),
-                    gpus=(menu.Gpu("Intel Arc", None, "wmi"),),
+                    memory=inventory.Memory(32 * 1024**3, 16 * 1024**3),
+                    gpus=(inventory.Gpu("Intel Arc", None, "wmi"),),
                 )
             )
         }
         self.assertIsNone(scores["GPU"].score)
 
     def test_the_state_mapping_gives_the_same_answer_as_the_inventory(self) -> None:
-        from_object = {c.name: c.score for c in system_one.component_scores(sample_inventory())}
-        from_state = {c.name: c.score for c in system_one.component_scores(sample_inventory().to_state())}
+        from_object = {c.name: c.score for c in judgment.component_scores(sample_inventory())}
+        from_state = {c.name: c.score for c in judgment.component_scores(sample_inventory().to_state())}
         self.assertEqual(from_object, from_state)
 
     def test_one_bad_adapter_does_not_hide_the_others(self) -> None:
         scores = {
             c.name: c
-            for c in system_one.component_scores(
+            for c in judgment.component_scores(
                 sample_inventory(
                     gpus=(
-                        menu.Gpu("NVIDIA RTX 3060", 12 * 1024**3, "nvml"),
-                        menu.Gpu("Mystery", None, "wmi", "driver did not report VRAM"),
+                        inventory.Gpu("NVIDIA RTX 3060", 12 * 1024**3, "nvml"),
+                        inventory.Gpu("Mystery", None, "wmi", "driver did not report VRAM"),
                     )
                 )
             )
         }
         self.assertTrue(scores["GPU"].known)
-        self.assertEqual(scores["GPU"].score, system_one._curve_score(Config().curve("gpu"), 12))
+        self.assertEqual(scores["GPU"].score, judgment._curve_score(Config().curve("gpu"), 12))
 
 
 class RulesRatingTests(unittest.TestCase):
@@ -183,7 +184,7 @@ class RateSystemTests(unittest.TestCase):
         self.assertTrue(any("No model was available" in f.text for f in rating.factors))
 
     def test_at_least_three_factors_always(self) -> None:
-        # SC-002: a single reason is not an explanation.
+        # A single reason is not an explanation.
         rating = rate_system(sample_inventory(), FakeClient(rating_answers(0.6)), Config())
         self.assertGreaterEqual(len(rating.factors), 3)
 

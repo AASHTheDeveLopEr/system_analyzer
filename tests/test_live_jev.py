@@ -152,7 +152,7 @@ class LiveContractTests(unittest.TestCase):
 
 @unittest.skipUnless(LIVE, "set SYSTEM_ANALYZER_LIVE_TESTS=1 to run the live contract tests")
 class LiveStabilityTests(unittest.TestCase):
-    """FR-007 wants a confidence band, and a band needs evidence that the
+    """A confidence band needs evidence that the
     model is at least repeatable. This measures it rather than assuming it."""
 
     def test_repeated_answers_stay_close(self):

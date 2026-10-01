@@ -1,7 +1,7 @@
 """Tests for config.py -- the declared thresholds, weights and curves.
 
-FR-006 says the verdict bands live in configuration, not in the code that
-decides a verdict. These tests pin that down: the defaults are documented, an
+These tests pin down the promise that the verdict bands live in configuration,
+never in the code that decides a verdict: the defaults are documented, an
 override actually takes effect, and a nonsense override is refused loudly
 rather than silently ignored.
 """
