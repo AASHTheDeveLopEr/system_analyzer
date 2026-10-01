@@ -5,19 +5,26 @@ decision model (Jev) to rate the system out of 100 and answer "can I run X?".
 
 ## Files
 
-- `main.py` — the application: argument parsing, the commands, the numbered
-  menu, the question log, JSON output and exit codes.
-- `menu.py` — hardware detection only: CPU, RAM, GPU/VRAM, disks, OS.
-- `system_one.py` — the decision layer: typed `noul` / `choice` / `score`
-  questions against Jev, and the composition that turns the answers into a
-  rating or a verdict.
+- `main.py` — the whole user surface: argument parsing (one subparser per
+  command), the commands, the single interactive loop, the settings menu,
+  setup, JSON output and exit codes.
+- `inventory.py` — hardware detection only: CPU, RAM, GPU/VRAM, disks, OS.
+- `system_one.py` — the wire client: request validation, HTTP transport with
+  failover, and decoding the typed `noul` / `choice` / `score` answers.
+- `judgment.py` — the judgment layer: measured facts + model answers composed
+  into the 0–100 rating and the capability verdicts.
+- `providers.py` — the provider catalog: the endpoint builders, the provider
+  chain, Ollama discovery and address resolution, TypeSafe model listing,
+  and the per-provider guidance.
+- `requirements.py` — requirement checklists: pasted requirements parsed,
+  numerics checked locally, named parts judged by the model.
+- `settings.py` — the settings: one registry driving config.json, .env, the
+  menus and the `config` display, with a defined precedence between them.
+- `history.py` — the local question log.
 - `config.py` — the thresholds, weights and curves, all declared in
   configuration rather than hidden in code.
 - `tests/` — the test suite (standard library `unittest`, no test dependency).
 - `requirements.txt` — the handful of libraries the app uses.
-
-The spec is not in this repository: `specs/` is git-ignored, so the feature
-requirements live with the project brief rather than in the source tree.
 
 ## Install
 
@@ -45,7 +52,6 @@ On RAM, GPU and VRAM specifically:
 - On Linux, VRAM for AMD GPUs comes from the driver's `mem_info_vram_total` in
   `/sys/class/drm`. Intel integrated graphics have no dedicated VRAM file, so
   VRAM stays `unknown`.
-
 - On macOS, `system_profiler` reports GPU names; dedicated VRAM is only counted
   when the OS exposes it as such (not shared-system-memory).
 - Virtual adapters (VMware, VirtualBox, Hyper-V, basic render drivers, llvmpipe,
@@ -54,19 +60,84 @@ On RAM, GPU and VRAM specifically:
 ## Running
 
 ```bash
-python main.py                      # menu, if a terminal; one-shot, if piped
+python main.py                      # interactive: menu on a terminal,
+                                    # one answer per line if piped
 python main.py specs                # what was detected
 python main.py rate                 # 0-100, the model's tier, and what moved it
 python main.py ask "can I run Cyberpunk 2077?"
 python main.py rate -n 5            # ask five times, report how much it moves
 python main.py history              # the questions asked so far
 python main.py clear                # forget them
-python main.py config               # the thresholds and weights in force
+python main.py config               # thresholds, weights, and the provider chain
 python main.py payload              # the scrubbed state sent to the model
+python main.py setup                # choose providers and models, save the choice
+python main.py check "Office" --min-reqs "4 GB RAM; 10 GB storage"
 ```
 
-`session` keeps asking questions until you type `quit`; `menu` forces the
-numbered menu even when input is piped.
+Every command has its own `--help` (`python main.py ask --help`) listing only
+the flags that command actually uses. The shared flags (`--json`, `--config`,
+`--history-file`, `--no-history`) work in either position, before or after the
+command.
+
+### The interactive app
+
+`python main.py` (or `session` / `menu` — they are aliases) opens one
+interactive mode. In a terminal it shows a menu, and *any line that is not a
+menu number is treated as a question*, so you never have to enter a submenu
+just to ask something:
+
+```
+  1. Show my specs
+  2. Rate my PC out of 100
+  3. Ask a question
+  4. History
+  5. Settings
+  0. Quit
+  ...or just type a question, e.g. "can I game?"
+  ...or "check <task>" to paste a program's requirements
+      and check them against this machine
+  Ask or choose > can I run Cyberpunk 2077?
+```
+
+With piped stdin the same loop reads one question per line and answers until
+the pipe ends: `echo "can I game?" | python main.py`.
+
+So you always know what is happening, the app says what it is doing: before a
+model call it prints who is being asked and the timeout (`Asking zen (up to
+30 s) ...`), repeated runs count themselves (`run 2/5 ...`), and the answer's
+source line ends with how long the model took. Hardware is detected once per
+session, not re-probed for every question.
+
+### Requirement checklists (the ask-back)
+
+A decision model cannot know what a program requires, and a small local
+model cannot even judge "can this machine run X" open-ended — it answers
+coin flips. So when an answer comes back unsure, the app asks *you* for the
+requirements (game stores list them), and checks each one in the role that
+fits:
+
+- **Numeric requirements** ("8 GB RAM", "2.4 GHz", "60 GB storage") are
+  compared directly against the measured specs — deterministic, offline, no
+  model call, exact numbers shown.
+- **Named parts** ("GTX 970") become one atomic yes/no question for the
+  provider, gated by the usual coin-flip rule: an unsure model counts as
+  *unknown*, never as a pass or a fail.
+- Anything unparsable is reported as **not checked**. Nothing is guessed.
+
+The same requirements text can carry a recommended tier; the gap between
+minimum and recommended is the verdict: *Meets the recommended — runs well*,
+*Meets the minimum — runs, but tightly*, or *Below the minimum*, always
+naming which requirement and both numbers. Scripts get the same checklist
+via `--min-reqs` / `--rec-reqs`; an unsure `ask` in `--json` mode carries
+`"requirements_needed": true` and a hint instead of blocking on a question.
+
+You never have to wait for an unsure answer to be told you can help, and the
+checklist needs no menu of its own: it is offered automatically after an
+unsure answer, and typing `check <task>` in the interactive app (at the main
+prompt, or as option 3's answer) goes straight to it — no model call is spent
+on a judgment the checklist will not use. From the command line,
+`ask "<task>" --check` or `check "<task>" --min-reqs "..."` does the same in
+one shot.
 
 ### Machine-readable mode
 
@@ -107,7 +178,7 @@ sends it as a 0–1 fraction.
 ## Tests
 
 ```bash
-python -m unittest discover -s tests          # 179 offline tests, no network (10 opt-in live skipped)
+python -m unittest discover -s tests          # 279 offline tests, no network (12 opt-in live skipped)
 python system_one.py --selftest               # the decision layer, verbose
 ```
 
@@ -116,7 +187,11 @@ Verified passing (10/10, 2026-09-30):
 
 ```bash
 SYSTEM_ANALYZER_LIVE_TESTS=1 python -m unittest tests.test_live_jev
+SYSTEM_ANALYZER_LIVE_TESTS=1 python -m unittest tests.test_live_ollama
 ```
+
+The Ollama half is skipped unless a local Ollama answers and has a
+decision-capable model installed.
 
 Check the decision layer against the real API:
 
@@ -129,20 +204,59 @@ python system_one.py --probe -n 5       # five calls, reporting answer spread
 names) and re-asks the same questions, which is how you check whether a
 confidence band would mean anything before building the rating on top of it.
 
-## Keys
+## Providers and settings
 
-No key is required. The default endpoint is **OpenCode Zen's free
-`jev-1.13-free` model**, at `https://opencode.ai/zen/v1/systemone`; set
-`OPENCODE_ZEN_API_KEY` to use your own Zen key instead of the public one.
+Which endpoint answers is the **provider chain**: an ordered list, stored in
+`config.json` next to the code and edited with `python main.py setup` or the
+Settings entry in the menu. A provider left out of the chain is never
+contacted — not even as a fallback — so the chain itself is the privacy
+decision. When a chain falls through to a later provider, the answer's
+`source` and a note say so; exit code 3 means nothing answered.
 
-**It is a hosted model, not a local one.** This machine's specs are sent to
-OpenCode on every rating and every question, and there is no offline mode — a
-local Jev-compatible provider (Laya) was on the original plan and is
-deliberately deferred. "Free" here means *no key and no cost*, not *on this
-machine*.
+| Provider   | Runs                        | Key                 | Default? |
+| ---------- | --------------------------- | ------------------- | -------- |
+| `ollama`   | on this machine, offline    | none                | no       |
+| `zen`      | online (OpenCode Zen)       | optional            | **yes**  |
+| `typesafe` | online (paid)               | `TYPESAFE_API_KEY`  | no       |
 
-The paid TypeSafe endpoint stays off unless **both** `TYPESAFE_API_KEY` and
-`SYSTEM_ANALYZER_CLOUD_FALLBACK` are set.
+The default chain is `zen` alone. TypeSafe joins when listed in the chain.
+As a legacy path, when **no** chain is configured anywhere, the paid endpoint
+can still join as a last resort if **both** `TYPESAFE_API_KEY` and
+`SYSTEM_ANALYZER_CLOUD_FALLBACK` are set — but once you write a chain of your
+own, the chain is the entire truth and the flag is ignored.
+
+### Ollama (local decision models)
+
+Ollama serves the same wire format from `http://localhost:11434`. The app
+never assumes which models exist: whatever its discovery reports with the
+`decision` capability is the whole menu, and the app never installs anything
+itself. When Ollama is running but nothing decision-capable is installed, the
+advice is:
+
+```bash
+ollama pull tev1:0.8b
+```
+
+Ollama on another port or machine is picked up from `OLLAMA_HOST`, or fixed
+with `SYSTEM_ANALYZER_OLLAMA_URL`. Local models get a 120-second ceiling per
+question rather than the cloud endpoints' 30, because a 0.8B model on a CPU
+is slow by nature.
+
+### Where settings live
+
+Two git-ignored files sit next to the code: `config.json` (choices) and
+`.env` (secrets only — written by the app, never displayed). The same setting
+can be given in three places, and the winner is the one a script controls:
+
+1. a real environment variable
+2. the same name in `.env`
+3. `config.json`
+4. the built-in default
+
+`python main.py config` shows every value with where it came from. The
+settings: `SYSTEM_ANALYZER_PROVIDERS` (the chain, e.g. `ollama,zen`),
+`SYSTEM_ANALYZER_OLLAMA_URL`, `SYSTEM_ANALYZER_OLLAMA_MODEL`,
+`OPENCODE_ZEN_API_KEY`, `TYPESAFE_API_KEY`.
 
 ## Not settled
 
