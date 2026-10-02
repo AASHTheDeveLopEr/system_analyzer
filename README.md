@@ -12,7 +12,6 @@ Detects CPU, RAM, GPU, VRAM, disks, and OS, then uses a System One decision mode
 ![psutil](https://img.shields.io/badge/psutil-Hardware-2C3E50?style=for-the-badge)
 ![Local](https://img.shields.io/badge/Runs-Locally-1ABC9C?style=for-the-badge)
 ![Tests](https://img.shields.io/badge/Tests-unittest-4A90A4?style=for-the-badge)
-![Local](https://img.shields.io/badge/Runs-Locally-2C3E50?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)
 
 </div>
