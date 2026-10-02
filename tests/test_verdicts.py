@@ -1,4 +1,4 @@
-"""Tests for answer_capability: the bands, and the honesty rules (FR-005..FR-007).
+"""Tests for answer_capability: the bands, and the honesty rules.
 
 The band thresholds are configuration, and the rules that hold confidence down
 are the reason to trust the confidence. These tests drive a FakeClient so each
@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import unittest
 
-import menu
+import inventory
 import system_one
 from config import Config
-from system_one import SystemOneError, answer_capability
+from system_one import SystemOneError
+from judgment import answer_capability
 from tests._helpers import FakeClient, capability_answers, sample_inventory
 
 
@@ -101,7 +102,7 @@ class HonestyTests(unittest.TestCase):
         self.assertLessEqual(verdict.confidence, 40)
 
     def test_a_question_the_specs_cannot_answer_gets_no_verdict(self) -> None:
-        # US2 scenario 2: "can I stream 4K on Twitch" depends on bandwidth and
+        # "can I stream 4K on Twitch" depends on bandwidth and
         # upload speed, which are not in a hardware inventory.
         verdict = verdict_for(
             capability_answers(
@@ -147,7 +148,7 @@ class BottleneckTests(unittest.TestCase):
         verdict = answer_capability(
             sample_inventory(
                 cpu_cores=2,
-                memory=menu.Memory(2 * 1024**3, 1 * 1024**3),
+                memory=inventory.Memory(2 * 1024**3, 1 * 1024**3),
             ),
             "Can I run Cyberpunk 2077?",
             FakeClient(capability_answers(0.4, second="no")),

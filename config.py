@@ -1,9 +1,9 @@
-"""Declared tunables for rating and verdicts (spec FR-006, FR-007).
+"""Declared tunables for rating and verdicts.
 
 Every number that decides what the user is told lives here, named and
-documented, rather than inside the logic that uses it. FR-006 is explicit that
-verdict bands must be "derived from model probabilities using thresholds
-declared in configuration, not hard-coded ad hoc" -- so if you want a different
+documented, rather than inside the logic that uses it. The verdict bands are
+deliberately "derived from model probabilities using thresholds declared in
+configuration, not hard-coded ad hoc" -- so if you want a different
 split between "Yes" and "Likely", this is the file, not the question builder.
 
 Override any of it with a JSON file, either by pointing ``--config`` at one or
@@ -34,7 +34,7 @@ CONFIG_ENV = "SYSTEM_ANALYZER_CONFIG"
 MIN_PLAUSIBLE_PROBABILITY = 0.05
 
 # --------------------------------------------------------------------------
-# Verdict bands (FR-005, FR-006)
+# Verdict bands
 # --------------------------------------------------------------------------
 # Ordered high to low; the first threshold the probability reaches wins. The
 # bands are deliberately not symmetric about 0.5: "Likely" occupies a wider
@@ -48,12 +48,13 @@ VERDICT_BANDS: dict[str, float] = {
 
 #: How close to 0.5 counts as "the model is not sure". Inside this margin the
 #: verdict is capped at "Probably not"-or-better reporting and the confidence
-#: is clamped down, because a coin flip is not evidence (FR-006).
+#: is clamped down, because a coin flip is not evidence.
 UNCERTAIN_MARGIN = 0.10
 
 #: Confidence ceiling applied when the question could not be grounded in the
 #: detected hardware at all. Reporting 80% on a question the specs cannot
-#: answer would be exactly the confident-looking percentage FR-006 forbids.
+#: answer would be exactly the kind of confident-looking number that must not
+#: happen.
 UNGROUNDED_CONFIDENCE_CAP = 30
 
 #: Confidence ceiling when the probability sits inside UNCERTAIN_MARGIN.
@@ -68,11 +69,11 @@ DISAGREEMENT_PENALTY = 15
 MIN_REPORTABLE_CONFIDENCE = 20
 
 #: Allowed confidence drift across repeated identical questions, in points
-#: (FR-007 / SC-007).
+#:.
 STABILITY_TOLERANCE = 5
 
 # --------------------------------------------------------------------------
-# Rating composition (FR-003, FR-004)
+# Rating composition
 # --------------------------------------------------------------------------
 # Weights over the deterministic component sub-scores. They must sum to 1.0;
 # :func:`Config.validate` enforces it, because weights that do not sum to 1
@@ -89,14 +90,14 @@ RATING_WEIGHTS: dict[str, float] = {
 #: shown separately, so this changes the headline number, never the audit.
 MODEL_BLEND = 0.5
 
-#: Contributing factors reported with every rating (SC-002 wants at least 3).
+#: Contributing factors reported with every rating (at least 3).
 MIN_FACTORS = 3
 
 #: A component scoring below this is called out as a bottleneck in verdicts.
 BOTTLENECK_SCORE = 45
 
 # --------------------------------------------------------------------------
-# Component scoring curves (FR-004)
+# Component scoring curves
 # --------------------------------------------------------------------------
 # Piecewise-linear anchors, in the component's own unit, mapped onto 0-100.
 # Anchors are (value, score) pairs and the score is linearly interpolated
@@ -129,7 +130,7 @@ MEMORY_CURVE: tuple[tuple[float, float], ...] = (
 )
 
 #: Scored on dedicated VRAM only. An integrated adapter with no dedicated
-#: memory is *unknown*, not zero -- see menu.Gpu.vram_bytes.
+#: memory is *unknown*, not zero -- see inventory.Gpu.vram_bytes.
 GPU_VRAM_CURVE: tuple[tuple[float, float], ...] = (
     (0.0, 0.0),
     (1.0, 12.0),

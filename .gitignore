@@ -217,7 +217,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# --- Local AI tooling / spec workflow (not part of the app) ---
+# --- Local AI tooling and working notes (not part of the app) ---
 .pi/
 .specify/
 specs/
@@ -228,3 +228,4 @@ specs/
 history.json
 # Scratch directories the test suite creates and removes.
 .test-tmp-*/
+config.json

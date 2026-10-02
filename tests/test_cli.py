@@ -1,4 +1,4 @@
-"""Tests for the CLI in main.py (FR-000, FR-012, FR-015).
+"""Tests for the CLI in main.py.
 
 The point of these is the contract a script depends on: ``--json`` stdout is
 nothing but JSON, hints go to stderr, and the exit code says what happened.
@@ -15,7 +15,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 import main as cli
-import menu
+import inventory
 import system_one
 from system_one import SystemOneError
 from tests._helpers import (
@@ -37,7 +37,7 @@ class CliCase(TempDir):
     def run_cli(self, *argv: str, answers: dict | None = None, error: Exception | None = None) -> tuple[int, str, str]:
         client = FakeClient(answers if answers is not None else rating_answers(), error=error)
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(menu, "detect_inventory", return_value=sample_inventory()):
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
             with mock.patch.object(cli, "SystemOneClient", return_value=client):
                 with redirect_stdout(out), redirect_stderr(err):
                     code = cli.main(["--history-file", str(self.tmp / "history.json"), *argv])
@@ -61,7 +61,7 @@ class SpecsTests(CliCase):
         self.assertEqual(payload["inventory"]["memory"]["total_gib"], 16.0)
 
     def test_an_unreadable_component_is_shown_as_unreadable(self) -> None:
-        with mock.patch.object(menu, "detect_inventory", return_value=sample_inventory(gpus=())):
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory(gpus=())):
             client = FakeClient(rating_answers())
             out = io.StringIO()
             with mock.patch.object(cli, "SystemOneClient", return_value=client):
@@ -236,7 +236,7 @@ class PayloadAndConfigTests(CliCase):
     def test_a_broken_config_is_a_usage_error_not_a_traceback(self) -> None:
         path = self.write("bad.json", "{nope")
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(menu, "detect_inventory", return_value=sample_inventory()):
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
             with mock.patch.object(cli, "SystemOneClient", return_value=FakeClient(rating_answers())):
                 with redirect_stdout(out), redirect_stderr(err):
                     code = cli.main(["--config", str(path), "rate"])
@@ -249,7 +249,7 @@ class SessionTests(CliCase):
     def _run_session(self, replies: list[str], tty: bool = True) -> tuple[int, str, str, FakeClient]:
         client = FakeClient(capability_answers(0.95))
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(menu, "detect_inventory", return_value=sample_inventory()):
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
             with mock.patch.object(cli, "SystemOneClient", return_value=client):
                 with mock.patch("builtins.input", side_effect=replies):
                     with mock.patch.object(cli.sys.stdin, "isatty", return_value=tty):
@@ -272,7 +272,7 @@ class SessionTests(CliCase):
     def test_a_question_is_answered_even_when_the_endpoint_is_dead(self) -> None:
         client = FakeClient(error=SystemOneError("offline"))
         out = io.StringIO()
-        with mock.patch.object(menu, "detect_inventory", return_value=sample_inventory()):
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
             with mock.patch.object(cli, "SystemOneClient", return_value=client):
                 with mock.patch("builtins.input", side_effect=["can I game?", "quit"]):
                     with mock.patch.object(cli.sys.stdin, "isatty", return_value=True):
@@ -284,7 +284,7 @@ class SessionTests(CliCase):
     def test_a_piped_question_is_answered_and_the_pipe_ends_it(self) -> None:
         client = FakeClient(capability_answers(0.95))
         out = io.StringIO()
-        with mock.patch.object(menu, "detect_inventory", return_value=sample_inventory()):
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
             with mock.patch.object(cli, "SystemOneClient", return_value=client):
                 with mock.patch.object(cli.sys, "stdin", io.StringIO("can I game?\n")):
                     with redirect_stdout(out), redirect_stderr(io.StringIO()):
@@ -294,7 +294,7 @@ class SessionTests(CliCase):
 
     def _run_menu(self, choices: list[str]) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(menu, "detect_inventory", return_value=sample_inventory()):
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
             with mock.patch.object(cli, "SystemOneClient", return_value=FakeClient(capability_answers(0.95))):
                 with mock.patch("builtins.input", side_effect=choices):
                     with mock.patch.object(cli.sys.stdin, "isatty", return_value=True):
@@ -304,7 +304,7 @@ class SessionTests(CliCase):
 
     def test_the_menu_offers_the_features_the_app_actually_has(self) -> None:
         out = io.StringIO()
-        with mock.patch.object(menu, "detect_inventory", return_value=sample_inventory()):
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
             with mock.patch.object(cli, "SystemOneClient", return_value=FakeClient(rating_answers())):
                 with mock.patch("builtins.input", side_effect=["0"]):
                     with mock.patch.object(cli.sys.stdin, "isatty", return_value=True):
@@ -326,10 +326,127 @@ class SessionTests(CliCase):
 
     def test_typing_a_question_at_the_menu_prompt_asks_it(self) -> None:
         # The menu is a convenience, not a gate: the question itself is a valid
-        # answer to "Choose >".
+        # answer to "Ask or choose >".
         code, out, _err = self._run_menu(["can I game?", "0"])
         self.assertEqual(code, cli.EXIT_OK)
         self.assertIn("Verdict", out)
+
+    def test_a_wrong_number_gets_a_hint_not_a_model_question(self) -> None:
+        # Typing "7" at the menu is a keypress mistake; it must never reach the
+        # model as a question about what this machine can do.
+        client = FakeClient(capability_answers(0.95))
+        out = io.StringIO()
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
+            with mock.patch.object(cli, "SystemOneClient", return_value=client):
+                with mock.patch("builtins.input", side_effect=["9", "0"]):
+                    with mock.patch.object(cli.sys.stdin, "isatty", return_value=True):
+                        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+                            code = cli.main(["--history-file", str(self.history_path()), "menu"])
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("not a menu choice", out.getvalue())
+        self.assertEqual(client.calls, [])
+
+    def test_typing_check_at_the_prompt_runs_the_checklist_without_a_model_call(self) -> None:
+        # "check <task>" is the fast path for requirements already in hand; it
+        # must not spend an open-ended model call first.
+        client = FakeClient(capability_answers(0.95))
+        out = io.StringIO()
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
+            with mock.patch.object(cli, "SystemOneClient", return_value=client):
+                with mock.patch("builtins.input", side_effect=["check Office", "4 GB RAM", "", "", "0"]):
+                    with mock.patch.object(cli.sys.stdin, "isatty", return_value=True):
+                        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+                            code = cli.main(["--history-file", str(self.history_path()), "menu"])
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("Checklist  : Office", out.getvalue())
+        self.assertIn("Meets the minimum", out.getvalue())
+        self.assertEqual(client.calls, [])
+
+    def test_option_3_accepts_check_to_go_straight_to_the_checklist(self) -> None:
+        # Option 3 answers questions; typing "check <task>" into it reaches the
+        # same checklist, so the feature needs no menu slot of its own.
+        client = FakeClient(capability_answers(0.95))
+        out = io.StringIO()
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
+            with mock.patch.object(cli, "SystemOneClient", return_value=client):
+                with mock.patch(
+                    "builtins.input",
+                    side_effect=["3", "check Office", "4 GB RAM", "", "", "0"],
+                ):
+                    with mock.patch.object(cli.sys.stdin, "isatty", return_value=True):
+                        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+                            code = cli.main(["--history-file", str(self.history_path()), "menu"])
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("Checklist  : Office", out.getvalue())
+        self.assertIn("Meets the minimum", out.getvalue())
+        self.assertEqual(client.calls, [])
+
+
+class CheckTests(CliCase):
+    def test_a_checklist_compares_numbers_against_this_machine(self) -> None:
+        code, out, _err = self.run_cli("check", "Office", "--min-reqs", "4 GB RAM; 2 GB storage")
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("Office", out)
+        self.assertIn("pass", out)
+
+    def test_below_the_minimum_names_the_requirement_and_fails(self) -> None:
+        code, out, _err = self.run_cli("check", "Game", "--min-reqs", "64 GB RAM")
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("FAIL", out)
+        self.assertIn("Below the minimum", out)
+
+    def test_check_without_requirements_is_a_usage_error(self) -> None:
+        code, _out, err = self.run_cli("check", "Office")
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertIn("no requirements given", err)
+
+
+class ProgressLineTests(CliCase):
+    """The wait for a model answer is announced, not silent."""
+
+    PROVIDERS = [{"name": "fake", "url": "https://x.example", "model": "m",
+                  "source": "free", "timeout": 7}]
+
+    def test_the_wait_is_explained_before_the_model_is_asked(self) -> None:
+        client = FakeClient(rating_answers(), providers=self.PROVIDERS)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
+            with mock.patch.object(cli, "SystemOneClient", return_value=client):
+                with redirect_stdout(out), redirect_stderr(err):
+                    code = cli.main(["--history-file", str(self.history_path()), "rate"])
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("Asking fake", out.getvalue())
+        self.assertIn("up to 7 s", out.getvalue())
+
+    def test_json_mode_keeps_the_progress_line_off_stdout(self) -> None:
+        client = FakeClient(rating_answers(), providers=self.PROVIDERS)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
+            with mock.patch.object(cli, "SystemOneClient", return_value=client):
+                with redirect_stdout(out), redirect_stderr(err):
+                    cli.main(["--history-file", str(self.history_path()), "rate", "--json"])
+        json.loads(out.getvalue())  # stdout is still pure JSON
+        self.assertIn("Asking fake", err.getvalue())
+
+    def test_a_client_without_endpoints_stays_silent(self) -> None:
+        client = FakeClient(rating_answers(), providers=[])
+        out, _err = io.StringIO(), io.StringIO()
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
+            with mock.patch.object(cli, "SystemOneClient", return_value=client):
+                with redirect_stdout(out), redirect_stderr(io.StringIO()):
+                    cli.main(["--history-file", str(self.history_path()), "rate"])
+        self.assertNotIn("Asking", out.getvalue())
+
+    def test_the_source_line_reports_how_long_the_model_took(self) -> None:
+        client = FakeClient(rating_answers(), providers=self.PROVIDERS)
+        out, _err = io.StringIO(), io.StringIO()
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
+            with mock.patch.object(cli, "SystemOneClient", return_value=client):
+                with mock.patch.object(cli.time, "monotonic", side_effect=[0.0, 5.0]):
+                    with redirect_stdout(out), redirect_stderr(io.StringIO()):
+                        code = cli.main(["--history-file", str(self.history_path()), "rate"])
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("(5.0 s)", out.getvalue())
 
 
 if __name__ == "__main__":

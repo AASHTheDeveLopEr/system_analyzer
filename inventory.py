@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""The menu of System Analyzer.
+"""The hardware inventory of System Analyzer.
 
-Run it:  python menu.py
+Detection only: this module answers one question -- what hardware does this
+machine have? Menus, commands and output live in ``main.py``.
 
 Detection is done by libraries, not by hand: psutil for RAM and disks,
 py-cpuinfo for the CPU, pynvml for NVIDIA GPUs on any OS, and gpu-detector
@@ -129,7 +130,7 @@ class Disk:
 
     def to_state(self) -> dict[str, Any]:
         # The mount point is a path: it is shown locally but never leaves the
-        # machine with the state (FR-010).
+        # machine with the state.
         return {
             "total_gib": _gib(self.total_bytes),
             "free_gib": _gib(self.free_bytes),
@@ -179,7 +180,7 @@ class Inventory:
 
         Every field is present even when it is ``None``, so a missing reading
         stays visible as unknown instead of quietly becoming a zero the model
-        would reason about (FR-002). Live usage readings are deliberately
+        would reason about. Live usage readings are deliberately
         absent: they describe the moment, not the machine.
         """
         return {
@@ -206,7 +207,7 @@ def _gib(num_bytes: int | None) -> float | None:
 # Detectors
 # --------------------------------------------------------------------------
 # Each one returns its record and swallows the library's own failures, so a
-# blocked API shows up as "unknown" (SC-001) rather than a traceback.
+# blocked API shows up as "unknown" rather than a traceback.
 
 
 def detect_os() -> str:
@@ -278,7 +279,7 @@ def detect_disks() -> tuple[Disk, ...]:
     return tuple(disks)
 
 # Virtual and software-only adapters across platforms. They are not hardware,
-# and the spec wants an unknown field there rather than an invented GPU (FR-002).
+# and the field stays unknown there rather than an invented GPU.
 SOFTWARE_ADAPTERS = (
     # Windows virtual / remote
     "basic render driver",
@@ -303,7 +304,7 @@ SOFTWARE_ADAPTERS = (
 )
 
 # Vendors that gpu-detector reports as virtual or software rather than real
-# hardware. Cards from these vendors are filtered out (FR-002).
+# hardware. Cards from these vendors are filtered out.
 VIRTUAL_VENDORS = frozenset({
     "VMware", "Red Hat", "QEMU/Bochs", "VirtualBox",
 })
@@ -329,7 +330,7 @@ def detect_gpus() -> tuple[Gpu, ...]:
     pynvml reads NVIDIA cards on any OS and reports VRAM most reliably, so it
     goes first and its entries are preferred. ``gpu-detector`` then fills the
     gap for AMD, Intel, and other vendors on Linux, Windows (WMI), and macOS
-    (system_profiler). Software and virtual adapters are filtered out (FR-002).
+    (system_profiler). Software and virtual adapters are filtered out.
     """
     cards = _nvidia_gpus()
     known = [_normalize(gpu.name) for gpu in cards]
@@ -454,11 +455,6 @@ def detect_inventory() -> Inventory:
     )
 
 
-def get_specs() -> dict[str, str]:
-    """The detected specs as "label: value" pairs, for the CLI and for tests."""
-    return dict(detect_inventory().lines())
-
-
-# There is deliberately no main() here any more. The menu, the rating and the
-# question loop all live in main.py now, so there is exactly one entry point;
+# There is deliberately no main() here. The commands, the menus and the
+# question loop all live in main.py, so there is exactly one entry point;
 # run ``python main.py`` (or ``python main.py --help``) instead of this module.
