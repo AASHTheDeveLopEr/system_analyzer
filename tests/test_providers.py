@@ -165,28 +165,72 @@ class TypeSafeDiscoveryTests(TempDir):
 
 
 class OpenRouterDiscoveryTests(TempDir):
-    """The catalog carries no decision-capability tag, so recognition is a
-    judgement over two independent signals and is tested as one."""
+    """Decision models are found by a documented modality, not by guessing.
+
+    The fixture is copied from the live ``?output_modalities=decisions``
+    response, including the chat models that sit in the default catalog.
+    """
 
     CATALOG = {
         "data": [
-            # Known-good id, priced normally: kept on the id signal alone.
-            {"id": "typesafe/jev-1.13", "pricing": {"prompt": "0.000042", "completion": "0"}},
-            # Unknown to this app, but free on output: a System One model.
-            {"id": "somevendor/d1-mini", "pricing": {"prompt": "0.0001", "completion": "0"}},
-            # A normal text model: output is billed, so it is not a decision model.
-            {"id": "somevendor/chat-large", "pricing": {"prompt": "0.000003", "completion": "0.000015"}},
-            {"pricing": {"completion": "0"}},                       # no id
-            {"id": 42, "pricing": {"completion": "0"}},             # id is not a string
-            {"id": "no/pricing"},                                   # no pricing at all
+            {"id": "typesafe/jev-1.13",
+             "architecture": {"modality": "text->decisions", "output_modalities": ["decisions"]},
+             "pricing": {"prompt": "0.000000042", "completion": "0"}, "supported_parameters": []},
+            {"id": "~typesafe/jev-latest",
+             "architecture": {"modality": "text->decisions", "output_modalities": ["decisions"]},
+             "pricing": {"prompt": "0.000000042", "completion": "0"}},
+            # Real chat models from the default catalog. typesafe/jev-router is
+            # a *router* that picks a chat model, not a decision endpoint, and
+            # the :free models are ordinary chat models.
+            {"id": "typesafe/jev-router",
+             "architecture": {"modality": "text->text", "output_modalities": ["text"]},
+             "pricing": {"prompt": "-1", "completion": "-1"}},
+            {"id": "inclusionai/ling-3.1-flash",
+             "architecture": {"modality": "text->text", "output_modalities": ["text"]},
+             "pricing": {"prompt": "0", "completion": "0"}},
+            {"id": "apodex/apodex-1.1-mini:free",
+             "architecture": {"modality": "text->text", "output_modalities": ["text"]},
+             "pricing": {"prompt": "0", "completion": "0"}},
+            {"id": "no/architecture", "pricing": {"completion": "0"}},
+            {"id": "no/modalities", "architecture": {"modality": "text->text"}},
+            {"architecture": {"output_modalities": ["decisions"]}},   # no id
             "not even an object",
         ]
     }
 
-    def test_only_system_one_models_are_offered(self):
+    def test_only_decision_models_are_offered(self):
         with mock.patch.object(providers.requests, "get", return_value=_response(200, self.CATALOG)):
             models, reason = providers.discover_openrouter()
-        self.assertEqual(models, ["typesafe/jev-1.13", "somevendor/d1-mini"])
+        self.assertEqual(models, ["typesafe/jev-1.13", "~typesafe/jev-latest"])
+        self.assertEqual(reason, "")
+
+    def test_the_catalog_is_asked_for_decision_models(self):
+        """The default catalog omits them; asking for text finds nothing useful."""
+        with mock.patch.object(providers.requests, "get", return_value=_response(200, self.CATALOG)) as get:
+            providers.discover_openrouter()
+        self.assertIn("output_modalities=decisions", get.call_args.args[0])
+
+    def test_a_free_priced_chat_model_is_not_offered(self):
+        """Pricing was the old heuristic; 29 live models are priced that way."""
+        with mock.patch.object(providers.requests, "get", return_value=_response(200, self.CATALOG)):
+            models, _ = providers.discover_openrouter()
+        self.assertNotIn("inclusionai/ling-3.1-flash", models)
+        self.assertNotIn("apodex/apodex-1.1-mini:free", models)
+
+    def test_the_chat_router_is_not_offered(self):
+        """typesafe/jev-router picks a chat model; it does not answer decisions."""
+        with mock.patch.object(providers.requests, "get", return_value=_response(200, self.CATALOG)):
+            models, _ = providers.discover_openrouter()
+        self.assertNotIn("typesafe/jev-router", models)
+
+    def test_the_filter_fails_closed_if_the_query_parameter_is_ignored(self):
+        """A whole chat catalog must not be offered as decision models."""
+        chat_catalog = {"data": [e for e in self.CATALOG["data"]
+                                 if isinstance(e, dict)
+                                 and e.get("architecture", {}).get("output_modalities") == ["text"]]}
+        with mock.patch.object(providers.requests, "get", return_value=_response(200, chat_catalog)):
+            models, reason = providers.discover_openrouter()
+        self.assertEqual(models, [])
         self.assertEqual(reason, "")
 
     def test_the_catalog_is_listed_without_spending_the_key(self):

@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Mapping
 from urllib.parse import urlsplit
 
 import requests
@@ -66,17 +65,26 @@ PAID_MODELS_URL = "https://api.typesafe.ai/v1/models"
 #: TypeSafe endpoint speaks, so it needs no adapter and no second decoder.
 OPENROUTER_URL = "https://openrouter.ai/api/v1/systemone"
 
-#: OpenRouter's public model index, used to list which System One models an
-#: account can actually reach. Unlike the others this needs no key to read.
-OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+#: OpenRouter's public model index, narrowed to decision models. The
+#: ``output_modalities`` filter is documented and load-bearing: omitting it
+#: returns *text-output models only*, so decision models like Jev are absent
+#: from the default response. Unlike the other providers this needs no key.
+OPENROUTER_MODELS_URL = (
+    "https://openrouter.ai/api/v1/models?output_modalities=decisions"
+)
 
-#: The OpenRouter models this app knows how to use, for when the catalog
-#: cannot be listed (no network, or an index shape that changed). Advice for
-#: the user to confirm, never a silent default that hides a wrong choice.
+#: The modality a System One model reports for its output. Verified against
+#: the live catalog: every decision model carries ``"text->decisions"`` and
+#: ``output_modalities: ["decisions"]``.
+OPENROUTER_DECISION_MODALITY = "decisions"
+
+#: Offered when the catalog cannot be listed (no network, or the index shape
+#: changed). Both entries are confirmed present in the live decisions catalog.
+#: This is deliberately short: a model id guessed from a blog post would send
+#: the user to an endpoint that does not exist.
 OPENROUTER_SYSTEM_ONE_MODELS = (
     settings_module.OPENROUTER_DEFAULT_MODEL,
     "~typesafe/jev-latest",
-    "liquid/d1",
 )
 
 PROVIDER_LABELS = {
@@ -364,25 +372,24 @@ def discover_typesafe(api_key: str, timeout: float = DISCOVERY_TIMEOUT) -> tuple
 
 
 def _openrouter_system_one_ids(entries: object) -> list[str]:
-    """Model ids from the OpenRouter catalog that look like System One models.
+    """Model ids from the OpenRouter catalog that return typed decisions.
 
-    OpenRouter publishes no ``decision`` capability tag -- the field Ollama
-    uses and this app relies on there simply does not exist in this catalog --
-    so recognizing one is a judgement, not a lookup, and is made as two
-    independent signals:
+    Recognition is a documented lookup, not a judgement. OpenRouter tags
+    decision models with the ``decisions`` output modality and documents
+    ``output_modalities=decisions`` as the way to list them, so the catalog is
+    asked for exactly that set.
 
-    * the id is one this app already knows works, or
-    * the model is billed at zero for output tokens. That is the documented
-      pricing signature of a System One model: it returns typed answers
-      instead of generated text, so there are no output tokens to charge
-      for. Ollama's decision models are free for the same reason.
+    The modality is still checked on each entry rather than trusting the query
+    parameter to have been honoured: if the parameter is ever dropped or
+    renamed, an unchecked response would offer hundreds of chat models as
+    though they could answer a System One question. A chat model asked to
+    answer one fails every time, so a missing filter has to fail closed here.
 
-    The second signal is a heuristic and can admit a model that turns out
-    not to speak the System One wire format. That failure is cheap and
-    self-correcting -- the request comes back a 4xx and the chain moves to
-    the next provider -- so the list is offered as a *starting point* rather
-    than a guarantee. Nothing here guesses at a verdict; it only decides
-    what to show the user.
+    What is deliberately *not* used as a signal: billing. Zero-cost output
+    looked like a tidy marker for a model that returns no text, but the live
+    catalog holds 29 models priced that way -- ``:free`` chat models, a
+    zero-priced Llama flash -- and every one of them would have been offered
+    as a decision model.
     """
     if not isinstance(entries, list):
         return []
@@ -394,34 +401,15 @@ def _openrouter_system_one_ids(entries: object) -> list[str]:
         model_id = entry.get("id")
         if not isinstance(model_id, str) or not model_id:
             continue
-        if model_id in OPENROUTER_SYSTEM_ONE_MODELS or _output_is_free(entry):
+        architecture = entry.get("architecture")
+        modalities = (
+            architecture.get("output_modalities")
+            if isinstance(architecture, dict)
+            else None
+        )
+        if isinstance(modalities, list) and OPENROUTER_DECISION_MODALITY in modalities:
             ids.append(model_id)
     return ids
-
-
-def _as_float(value: Any) -> float | None:
-    """Parse a number that may have arrived as a string, else ``None``.
-
-    OpenRouter quotes its prices -- ``"0"`` and ``"0.000042"`` are both
-    strings -- so a plain ``float()`` on the raw value is not enough.
-    """
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    try:
-        return float(str(value).strip())
-    except ValueError:
-        return None
-
-
-def _output_is_free(entry: Mapping[str, Any]) -> bool:
-    """True when the catalog bills this model nothing for output tokens."""
-    pricing = entry.get("pricing")
-    if not isinstance(pricing, dict):
-        return False
-    completion = _as_float(pricing.get("completion"))
-    return completion is not None and completion <= 0.0
 
 
 def discover_openrouter(timeout: float = DISCOVERY_TIMEOUT) -> tuple[list[str] | None, str]:
