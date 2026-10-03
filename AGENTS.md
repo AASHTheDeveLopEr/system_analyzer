@@ -213,5 +213,4 @@ python system_one.py --probe -n 5
 
 # License
 
-Released under the MIT License when a `LICENSE` file is added to the repository.
-```
+Released under the MIT License. See [`LICENSE`](LICENSE).
