@@ -50,6 +50,13 @@ OLLAMA_MODEL_ENV = "SYSTEM_ANALYZER_OLLAMA_MODEL"
 CLOUD_FALLBACK_ENV = "SYSTEM_ANALYZER_CLOUD_FALLBACK"
 ZEN_KEY_ENV = "OPENCODE_ZEN_API_KEY"
 TYPESAFE_KEY_ENV = "TYPESAFE_API_KEY"
+OPENROUTER_KEY_ENV = "OPENROUTER_API_KEY"
+OPENROUTER_MODEL_ENV = "SYSTEM_ANALYZER_OPENROUTER_MODEL"
+
+#: OpenRouter serves System One models from several vendors under one key, so
+#: the model is a setting rather than a constant: `typesafe/jev-1.13` is the
+#: default only because it is the one this app already expects elsewhere.
+OPENROUTER_DEFAULT_MODEL = "typesafe/jev-1.13"
 
 
 @dataclass(frozen=True)
@@ -72,8 +79,8 @@ SETTINGS: tuple[Setting, ...] = (
         PROVIDERS_ENV,
         "Providers, in order",
         "Which decision providers to try, and in what order. "
-        "Comma-separated: ollama, zen, typesafe. A provider left out is "
-        "never contacted.",
+        "Comma-separated: ollama, zen, typesafe, openrouter. A provider left "
+        "out is never contacted.",
         default="zen",
         kind="chain",
     ),
@@ -108,12 +115,30 @@ SETTINGS: tuple[Setting, ...] = (
         "is on).",
         secret=True,
     ),
+    Setting(
+        "openrouter_api_key",
+        OPENROUTER_KEY_ENV,
+        "OpenRouter API key",
+        "OpenRouter hosts System One models from several vendors behind one "
+        "key. A key alone changes nothing: OpenRouter only joins the chain "
+        "when listed in Providers. Requests pass through OpenRouter to the "
+        "upstream vendor.",
+        secret=True,
+    ),
+    Setting(
+        "openrouter_model",
+        OPENROUTER_MODEL_ENV,
+        "OpenRouter model",
+        "Which System One model OpenRouter should answer with, e.g. "
+        f"{OPENROUTER_DEFAULT_MODEL}. Only reached when the key is set too.",
+        default=OPENROUTER_DEFAULT_MODEL,
+    ),
 )
 
 _BY_KEY = {setting.key: setting for setting in SETTINGS}
 _BY_ENV = {setting.env: setting for setting in SETTINGS}
 
-_CHAIN_IDS = ("ollama", "zen", "typesafe")
+_CHAIN_IDS = ("ollama", "zen", "typesafe", "openrouter")
 _KEY_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 

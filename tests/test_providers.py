@@ -164,6 +164,116 @@ class TypeSafeDiscoveryTests(TempDir):
         self.assertIn("failed", reason)
 
 
+class OpenRouterDiscoveryTests(TempDir):
+    """The catalog carries no decision-capability tag, so recognition is a
+    judgement over two independent signals and is tested as one."""
+
+    CATALOG = {
+        "data": [
+            # Known-good id, priced normally: kept on the id signal alone.
+            {"id": "typesafe/jev-1.13", "pricing": {"prompt": "0.000042", "completion": "0"}},
+            # Unknown to this app, but free on output: a System One model.
+            {"id": "somevendor/d1-mini", "pricing": {"prompt": "0.0001", "completion": "0"}},
+            # A normal text model: output is billed, so it is not a decision model.
+            {"id": "somevendor/chat-large", "pricing": {"prompt": "0.000003", "completion": "0.000015"}},
+            {"pricing": {"completion": "0"}},                       # no id
+            {"id": 42, "pricing": {"completion": "0"}},             # id is not a string
+            {"id": "no/pricing"},                                   # no pricing at all
+            "not even an object",
+        ]
+    }
+
+    def test_only_system_one_models_are_offered(self):
+        with mock.patch.object(providers.requests, "get", return_value=_response(200, self.CATALOG)):
+            models, reason = providers.discover_openrouter()
+        self.assertEqual(models, ["typesafe/jev-1.13", "somevendor/d1-mini"])
+        self.assertEqual(reason, "")
+
+    def test_the_catalog_is_listed_without_spending_the_key(self):
+        """Listing what exists must not require the secret used to ask."""
+        with mock.patch.object(providers.requests, "get", return_value=_response(200, self.CATALOG)) as get:
+            providers.discover_openrouter()
+        self.assertNotIn("headers", get.call_args.kwargs)
+
+    def test_a_failed_listing_names_the_reason(self):
+        with mock.patch.object(providers.requests, "get", return_value=_response(500, {})):
+            models, reason = providers.discover_openrouter()
+        self.assertIsNone(models)
+        self.assertIn("HTTP 500", reason)
+
+    def test_a_network_failure_is_reported(self):
+        with mock.patch.object(providers.requests, "get", side_effect=providers.requests.ConnectionError("down")):
+            models, reason = providers.discover_openrouter()
+        self.assertIsNone(models)
+        self.assertIn("failed", reason)
+
+    def test_an_unexpected_shape_is_reported(self):
+        with mock.patch.object(providers.requests, "get", return_value=_response(200, ["data"])):
+            models, reason = providers.discover_openrouter()
+        self.assertIsNone(models)
+        self.assertIn("unexpected", reason)
+
+
+class OpenRouterProviderTests(TempDir):
+    def test_in_the_chain_without_a_key_is_skipped_with_a_reason(self):
+        self.write("config.json", json.dumps({"provider_chain": "openrouter"}))
+        endpoints, skipped = providers.chain()
+        self.assertEqual(endpoints, [])
+        self.assertTrue(any(settings.OPENROUTER_KEY_ENV in reason for reason in skipped))
+
+    def test_a_key_is_all_it_takes_once_it_is_in_the_chain(self):
+        """There is no escalation flag: listing it is the whole opt-in."""
+        self.write("config.json", json.dumps({"provider_chain": "openrouter"}))
+        self.write(".env", f"{settings.OPENROUTER_KEY_ENV}=sk-or-test\n")
+        endpoints, skipped = providers.chain()
+        self.assertEqual(skipped, [])
+        self.assertEqual(len(endpoints), 1)
+        self.assertEqual(endpoints[0]["url"], providers.OPENROUTER_URL)
+        self.assertEqual(endpoints[0]["auth"], "Bearer sk-or-test")
+
+    def test_the_model_is_the_one_configured(self):
+        """Model choice is the reason to be here, so it is honoured."""
+        self.write(
+            "config.json",
+            json.dumps({"provider_chain": "openrouter", "openrouter_model": "liquid/d1"}),
+        )
+        self.write(".env", f"{settings.OPENROUTER_KEY_ENV}=sk-or-test\n")
+        endpoints, _ = providers.chain()
+        self.assertEqual(endpoints[0]["model"], "liquid/d1")
+
+    def test_a_blank_model_falls_back_to_the_known_default(self):
+        self.write(
+            "config.json",
+            json.dumps({"provider_chain": "openrouter", "openrouter_model": "   "}),
+        )
+        self.write(".env", f"{settings.OPENROUTER_KEY_ENV}=sk-or-test\n")
+        endpoints, _ = providers.chain()
+        self.assertEqual(endpoints[0]["model"], settings.OPENROUTER_DEFAULT_MODEL)
+
+    def test_the_key_is_never_part_of_the_printed_provider_summary(self):
+        self.write("config.json", json.dumps({"provider_chain": "openrouter"}))
+        self.write(".env", f"{settings.OPENROUTER_KEY_ENV}=sk-or-supersecret\n")
+        endpoints, _ = providers.chain()
+        shown = " ".join(
+            f"{p['name']} {p['url']} {p['model']} {p['source']}" for p in endpoints
+        )
+        self.assertNotIn("sk-or-supersecret", shown)
+
+
+class ChainMembershipTests(IsolatedSettings):
+    def test_a_provider_left_out_is_never_contacted(self):
+        """A key alone must not put a provider on the wire."""
+        os.environ[settings.OPENROUTER_KEY_ENV] = "sk-or-test"
+        endpoints, _ = providers.chain()
+        self.assertNotIn("openrouter", [p["name"] for p in endpoints])
+
+    def test_chain_order_is_the_user_s_order(self):
+        os.environ[settings.OPENROUTER_KEY_ENV] = "sk-or-test"
+        with mock.patch.dict(os.environ, {settings.PROVIDERS_ENV: "openrouter,zen"}):
+            endpoints, _ = providers.chain()
+        self.assertEqual([p["name"] for p in endpoints], ["openrouter", "jev-free"])
+
+
 class OllamaProviderTests(TempDir):
     def test_without_a_model_the_provider_is_skipped_with_a_reason(self):
         config = settings.load_settings(self.tmp)

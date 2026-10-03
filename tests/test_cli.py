@@ -401,6 +401,69 @@ class CheckTests(CliCase):
         self.assertIn("no requirements given", err)
 
 
+class OpenRouterSetupTests(CliCase):
+    """Setup must survive every shape the OpenRouter catalog can come back in.
+
+    The catalog is a public HTTP call made mid-setup, so each of its outcomes
+    is a way for the interactive flow to crash on an evening the network was
+    unhelpful rather than to ask a question.
+    """
+
+    def _setup(self, listed, typed, key="sk-or-test"):
+        """Drive `setup` with OpenRouter chosen, the catalog stubbed.
+
+        The key prompt goes through getpass rather than input(), so both
+        readers are stubbed: leaving getpass live would block on real stdin.
+        """
+        out = io.StringIO()
+        with mock.patch.object(cli.providers_module, "discover_openrouter", return_value=listed):
+            with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
+                with mock.patch.object(cli.providers_module, "discover_ollama",
+                                       return_value=cli.providers_module.OllamaStatus(False, [], "no")):
+                    with mock.patch("builtins.input", side_effect=["openrouter", *typed]):
+                        with mock.patch.object(cli.getpass, "getpass", return_value=key):
+                            with mock.patch.object(cli, "_interactive_terminal", return_value=True):
+                                with redirect_stdout(out), redirect_stderr(io.StringIO()):
+                                    code = cli.main(["setup"])
+        return code, out.getvalue()
+
+    def test_openrouter_is_offered_in_the_provider_list(self):
+        _, printed = self._setup(([], ""), [""])
+        self.assertIn("OpenRouter", printed)
+
+    def test_a_listed_model_can_be_picked_and_saved(self):
+        code, printed = self._setup((["typesafe/jev-1.13", "liquid/d1"], ""), ["2"])
+        self.assertEqual(code, cli.EXIT_OK)
+        saved = json.loads((self.tmp / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["openrouter_model"], "liquid/d1")
+
+    def test_an_empty_catalog_offers_the_known_models_instead_of_crashing(self):
+        # A listing that matched nothing must not index into an empty list.
+        code, printed = self._setup(([], ""), [""])
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("No System One models were recognized", printed)
+        for model_id in cli.providers_module.OPENROUTER_SYSTEM_ONE_MODELS:
+            self.assertIn(model_id, printed)
+
+    def test_an_unreachable_catalog_still_lets_setup_finish(self):
+        code, printed = self._setup((None, "connection failed"), [""])
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("Could not list", printed)
+
+    def test_a_configured_model_is_the_enter_default(self):
+        """Pressing Enter must keep what is already configured, not reset it."""
+        self.write("config.json", json.dumps({"openrouter_model": "liquid/d1"}))
+        code, printed = self._setup((["typesafe/jev-1.13", "liquid/d1"], ""), [""])
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("liquid/d1", printed)
+        saved = json.loads((self.tmp / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["openrouter_model"], "liquid/d1")
+
+    def test_setup_tells_the_user_the_state_leaves_the_machine(self):
+        _, printed = self._setup((["typesafe/jev-1.13"], ""), [""])
+        self.assertIn("forwards your request", printed)
+
+
 class ProgressLineTests(CliCase):
     """The wait for a model answer is announced, not silent."""
 
