@@ -31,37 +31,48 @@ class MatchingTests(unittest.TestCase):
     """The lookup: normalization, variants, laptop penalty, unknown."""
 
     def test_exact_name_matches(self):
-        self.assertEqual(rankings.gpu_score("RTX 3060"), 55.0)
-        self.assertEqual(rankings.cpu_score("Ryzen 5 3600"), 45.0)
+        self.assertEqual(rankings.gpu_score("RTX 3060"), 43.0)
+        self.assertEqual(rankings.cpu_score("Ryzen 5 3600"), 57.0)
 
     def test_vendor_prefixes_and_case_do_not_matter(self):
-        self.assertEqual(rankings.gpu_score("NVIDIA GeForce RTX 3060"), 55.0)
-        self.assertEqual(rankings.gpu_score("nvidia geforce rtx 3060"), 55.0)
-        self.assertEqual(rankings.gpu_score("AMD Radeon RX 580"), 29.0)
+        self.assertEqual(rankings.gpu_score("NVIDIA GeForce RTX 3060"), 43.0)
+        self.assertEqual(rankings.gpu_score("nvidia geforce rtx 3060"), 43.0)
+        self.assertEqual(rankings.gpu_score("AMD Radeon RX 580"), 27.0)
         self.assertEqual(
             rankings.cpu_score("11th Gen Intel(R) Core(TM) i5-1135G7"), 62.0
         )
 
     def test_a_suffix_variant_is_a_different_card(self):
         """The Ti is faster than the base card, so it must not match it."""
-        self.assertEqual(rankings.gpu_score("RTX 3060 Ti"), 60.0)
-        self.assertNotEqual(rankings.gpu_score("RTX 3060 Ti"), 55.0)
+        self.assertEqual(rankings.gpu_score("RTX 3060 Ti"), 52.0)
+        self.assertNotEqual(rankings.gpu_score("RTX 3060 Ti"), 43.0)
 
     def test_prose_around_the_part_is_absorbed(self):
-        self.assertEqual(rankings.gpu_score("GTX 970 or better"), 28.0)
-        self.assertEqual(rankings.gpu_score("at least a GTX 970"), 28.0)
+        self.assertEqual(rankings.gpu_score("GTX 970 or better"), 18.0)
+        self.assertEqual(rankings.gpu_score("at least a GTX 970"), 18.0)
 
     def test_laptop_variants_get_the_documented_penalty(self):
-        """A laptop card is its desktop equivalent at x0.8, rounded."""
-        self.assertEqual(rankings.gpu_score("RTX 3060 Laptop GPU"), 44.0)
-        self.assertEqual(rankings.gpu_score("GeForce RTX 3060 Max-Q"), 44.0)
-        self.assertEqual(rankings.gpu_score("RTX 3060 Mobile"), 44.0)
-        self.assertEqual(rankings.gpu_score("RTX 3060 M"), 44.0)
+        """A laptop card is its desktop equivalent at x0.8."""
+        self.assertEqual(rankings.gpu_score("RTX 3060 Laptop GPU"), 34.4)
+        self.assertEqual(rankings.gpu_score("GeForce RTX 3060 Max-Q"), 34.4)
+        self.assertEqual(rankings.gpu_score("RTX 3060 Mobile"), 34.4)
+        self.assertEqual(rankings.gpu_score("RTX 3060 M"), 34.4)
+
+    def test_an_f_sku_is_the_same_chip(self):
+        """An F variant is the same CPU without iGPU: same score."""
+        self.assertEqual(rankings.cpu_score("Core i5-12400F"), 69.0)
+        self.assertEqual(rankings.cpu_score("Core i7-13700KF"), 85.0)
+        self.assertEqual(rankings.cpu_score("14th Gen Intel Core i5-14400F"), 73.0)
+        # An F SKU scores the same as its base chip, not the K.
+        self.assertEqual(rankings.cpu_score("Core i5-12400F"),
+                         rankings.cpu_score("Core i5-12400"))
+        self.assertNotEqual(rankings.cpu_score("Core i7-13700KF"),
+                            rankings.cpu_score("Core i7-13700"))
 
     def test_a_laptop_only_part_has_an_entry_of_its_own(self):
         """The GeForce 610M has no desktop equivalent to penalize."""
-        self.assertEqual(rankings.gpu_score("GeForce 610M"), 8.0)
-        self.assertEqual(rankings.gpu_score("NVIDIA GeForce 610M"), 8.0)
+        self.assertEqual(rankings.gpu_score("GeForce 610M"), 6.0)
+        self.assertEqual(rankings.gpu_score("NVIDIA GeForce 610M"), 6.0)
 
     def test_an_unknown_part_is_none_never_a_guess(self):
         self.assertIsNone(rankings.gpu_score("GTX Mystery 9000"))
@@ -72,27 +83,29 @@ class MatchingTests(unittest.TestCase):
     def test_describe_names_the_nearest_anchor(self):
         self.assertEqual(
             rankings.describe("RTX 3060"),
-            "mid-range, ~55/100 (comparable to a RTX 3060)",
+            "mid-range, ~43/100 (comparable to a RTX 3060)",
         )
+        # A tie in the table is broken by table order: the
+        # 1060 is its own anchor, the 1650 Super sits below it.
         self.assertEqual(
             rankings.describe("GTX 1060"),
-            "entry-level, ~35/100 (comparable to a GTX 1060)",
+            "entry-level, ~25/100 (comparable to a GTX 1060)",
         )
         self.assertEqual(
             rankings.describe("Ryzen 5 3600"),
-            "entry-level, ~45/100 (comparable to a Ryzen 5 3600)",
+            "mid-range, ~57/100 (comparable to a Ryzen 5 3600)",
         )
         self.assertIsNone(rankings.describe("GTX Mystery 9000"))
 
     def test_tier_text_and_words(self):
-        self.assertEqual(rankings.tier_text(55.0), "mid-range 55/100")
+        self.assertEqual(rankings.tier_text(43.0), "mid-range 43/100")
         self.assertEqual(rankings.tier_text(100.0), "flagship 100/100")
         self.assertEqual(rankings.tier_text(None), "unknown")
         self.assertEqual(rankings.tier_word(95.0), "flagship")
         self.assertEqual(rankings.tier_word(75.0), "high-end")
-        self.assertEqual(rankings.tier_word(55.0), "mid-range")
-        self.assertEqual(rankings.tier_word(35.0), "entry-level")
-        self.assertEqual(rankings.tier_word(8.0), "low-end")
+        self.assertEqual(rankings.tier_word(43.0), "mid-range")
+        self.assertEqual(rankings.tier_word(25.0), "entry-level")
+        self.assertEqual(rankings.tier_word(15.0), "entry-level")
 
 
 class AnchorTests(unittest.TestCase):
@@ -100,19 +113,106 @@ class AnchorTests(unittest.TestCase):
 
     def test_the_flagship_is_a_hundred(self):
         self.assertEqual(rankings.gpu_score("RTX 5090"), 100.0)
-        self.assertEqual(rankings.cpu_score("Ryzen 9 9950X"), 100.0)
+        self.assertEqual(rankings.cpu_score("Ryzen 9 9950X3D"), 100.0)
 
     def test_the_documented_anchors(self):
-        self.assertEqual(rankings.gpu_score("GTX 1060"), 35.0)
-        self.assertEqual(rankings.gpu_score("GTX 970"), 28.0)
-        self.assertEqual(rankings.gpu_score("GeForce 610M"), 8.0)
-        self.assertEqual(rankings.cpu_score("Ryzen 5 3600"), 45.0)
-        self.assertEqual(rankings.cpu_score("Core i5-2450M"), 10.0)
+        self.assertEqual(rankings.gpu_score("GTX 1060"), 25.0)
+        self.assertEqual(rankings.gpu_score("GTX 970"), 18.0)
+        self.assertEqual(rankings.gpu_score("GeForce 610M"), 6.0)
+        self.assertEqual(rankings.cpu_score("Ryzen 5 3600"), 57.0)
+        self.assertEqual(rankings.cpu_score("Core i5-2450M"), 21.0)
 
     def test_the_rtx_4060_class_sits_mid_table(self):
         score = rankings.gpu_score("RTX 4060")
         self.assertIsNotNone(score)
-        self.assertTrue(55.0 <= score <= 60.0, score)
+        self.assertTrue(48.0 <= score <= 52.0, score)
+
+    def test_the_ordering_follows_the_published_hierarchies(self):
+        """Where a source measured both parts, the table must agree."""
+        gpu = rankings.gpu_score
+        # Tom's 2026 GPU hierarchy, measured percentages of an RTX 4090.
+        for faster, slower in (
+            ("RTX 5090", "RTX 4090"),
+            ("RTX 4090", "RX 7900 XTX"),
+            ("RX 7900 XTX", "RTX 4080 Super"),
+            ("RTX 4080 Super", "RTX 4080"),
+            ("RTX 4080", "RX 7900 XT"),
+            ("RX 7900 XT", "RTX 4070 Ti Super"),
+            ("RTX 4070 Ti Super", "RTX 4070 Super"),
+            ("RTX 4070 Super", "RTX 4070 Ti"),
+            ("RTX 4070 Ti", "RTX 3090 Ti"),
+            ("RTX 3090 Ti", "RTX 3090"),
+            ("RTX 3090", "RX 7800 XT"),
+            ("RX 7800 XT", "RTX 3080 Ti"),
+            ("RTX 3080 Ti", "RTX 3080"),
+            ("RTX 3080", "RX 7700 XT"),
+            ("RX 7700 XT", "RTX 3070 Ti"),
+            ("RTX 3070 Ti", "RX 6750 XT"),
+            ("RX 6750 XT", "RTX 4060 Ti"),
+            ("RTX 4060 Ti", "RTX 2080 Ti"),
+            ("RTX 2080 Ti", "RX 6700 XT"),
+            ("RX 6700 XT", "RTX 3070"),
+            ("RTX 3070", "RTX 2080"),
+            ("RTX 2080", "RX 6650 XT"),
+            ("RX 6650 XT", "RTX 3060 Ti"),
+            ("RTX 3060 Ti", "RX 6600 XT"),
+            ("RX 6600 XT", "RTX 2070 Super"),
+            ("RTX 2070 Super", "RTX 4060"),
+            ("RTX 4060", "RTX 2070"),
+            ("RTX 2070", "RX 7600"),
+            ("RX 7600", "RTX 2060 Super"),
+            ("RTX 2060 Super", "Arc A770"),
+            ("Arc A770", "RX 5700 XT"),
+            ("RX 5700 XT", "RTX 3060"),
+            ("RTX 3060", "Arc A750"),
+            ("Arc A750", "RTX 2060"),
+            ("RTX 2060", "RX Vega 64"),
+            ("RX Vega 64", "GTX 1080 Ti"),
+            ("GTX 1080 Ti", "RX 6600"),
+        ):
+            self.assertGreaterEqual(
+                gpu(faster), gpu(slower), f"{faster} should rank at or above {slower}"
+            )
+        # The classic cross-generation lines, still true after the
+        # recalibration: a 2060 beats a 1080 Ti, a 1060 beats a 970.
+        self.assertGreater(gpu("RTX 2060"), gpu("GTX 1080 Ti"))
+        self.assertGreater(gpu("GTX 1060"), gpu("GTX 970"))
+        self.assertGreaterEqual(gpu("GTX 1050 Ti"), gpu("GTX 970"))
+
+    def test_the_cpu_ordering_follows_the_hierarchies(self):
+        cpu = rankings.cpu_score
+        for faster, slower in (
+            ("Ryzen 9 9950X3D", "Ryzen 7 9800X3D"),
+            ("Ryzen 7 9800X3D", "Ryzen 9 9950X"),
+            ("Ryzen 9 9950X", "Core Ultra 9 285K"),
+            ("Core Ultra 9 285K", "Core i9-14900K"),
+            ("Core i9-14900K", "Core i9-13900K"),
+            ("Core i9-13900K", "Core i7-14700K"),
+            ("Core i7-14700K", "Ryzen 9 7950X"),
+            ("Ryzen 9 7950X", "Core i7-13700K"),
+            ("Core i7-13700K", "Ryzen 7 7800X3D"),
+            ("Ryzen 7 7800X3D", "Core i5-14600K"),
+            ("Core i5-14600K", "Core i7-12700K"),
+            ("Core i7-12700K", "Core i5-12600K"),
+            ("Core i5-12600K", "Ryzen 7 5800X3D"),
+            ("Ryzen 7 5800X3D", "Ryzen 7 5800X"),
+            ("Ryzen 7 5800X", "Core i5-12400"),
+            ("Core i5-12400", "Ryzen 5 5600X"),
+            ("Ryzen 5 5600X", "Core i5-10400"),
+            ("Core i5-10400", "Ryzen 5 3600"),
+            ("Ryzen 5 3600", "Core i7-7700K"),
+            ("Core i7-7700K", "Core i7-6700K"),
+            ("Core i7-6700K", "Core i7-4790K"),
+            ("Core i7-4790K", "Core i7-3770"),
+            ("Core i7-3770", "Core i5-2500"),
+            ("Core i5-2500", "Core i5-2450M"),
+            ("Core i5-2450M", "Pentium Gold G7400"),
+            ("Pentium Gold G7400", "Celeron G5905"),
+            ("Celeron G5905", "Atom x5-Z8350"),
+        ):
+            self.assertGreaterEqual(
+                cpu(faster), cpu(slower), f"{faster} should rank at or above {slower}"
+            )
 
     def test_every_score_sits_on_the_scale(self):
         for _pattern, score in rankings.GPU_RANKINGS + rankings.CPU_RANKINGS:
@@ -123,9 +223,9 @@ class RequirementCheckTests(TempDir):
     """The deterministic tier comparison for named parts."""
 
     MACHINE = {
-        "cpu": {"name": "AMD Ryzen 5 3600", "capability_score": 45.0},
+        "cpu": {"name": "AMD Ryzen 5 3600", "capability_score": 57.0},
         "gpus": [
-            {"name": "NVIDIA GeForce RTX 3060", "capability_score": 55.0},
+            {"name": "NVIDIA GeForce RTX 3060", "capability_score": 43.0},
         ],
         "memory": {"total_gib": 16.0},
         "storage": [{"total_gib": 512.0, "free_gib": 200.0}],
@@ -139,8 +239,8 @@ class RequirementCheckTests(TempDir):
         item = result.items[0]
         self.assertEqual(item.state, "passed")
         self.assertEqual(item.path, "tier-table")
-        self.assertIn("GTX 970 ~ 28/100", item.detail)
-        self.assertIn("RTX 3060 ~ 55/100", item.detail)
+        self.assertIn("GTX 970 ~ 18/100", item.detail)
+        self.assertIn("RTX 3060 ~ 43/100", item.detail)
         self.assertIn("curated tier table v", item.detail)
         self.assertEqual(client.calls, [])  # no model call was spent
 
@@ -152,8 +252,8 @@ class RequirementCheckTests(TempDir):
         item = result.items[0]
         self.assertEqual(item.state, "failed")
         self.assertEqual(item.path, "tier-table")
-        self.assertIn("RTX 4080 ~ 88/100", item.detail)
-        self.assertIn("RTX 3060 ~ 55/100", item.detail)
+        self.assertIn("RTX 4080 ~ 89/100", item.detail)
+        self.assertIn("RTX 3060 ~ 43/100", item.detail)
         self.assertEqual(result.verdict, "Below the minimum")
         self.assertEqual(client.calls, [])
 
@@ -296,7 +396,7 @@ class DetectionTests(unittest.TestCase):
         with self._with_platform(cards):
             gpus = inventory.detect_gpus()
 
-        self.assertEqual([gpu.capability for gpu in gpus], [55.0, 13.0])
+        self.assertEqual([gpu.capability for gpu in gpus], [43.0, 8.0])
 
     def test_an_unknown_card_keeps_capability_none(self):
         with self._with_platform([self._gpu_info("Mystery GPU", "NVIDIA")]):
@@ -311,7 +411,7 @@ class DetectionTests(unittest.TestCase):
         ), mock.patch.object(inventory, "detect_gpus", return_value=()):
             machine = inventory.detect_inventory()
 
-        self.assertEqual(machine.cpu_capability, 45.0)
+        self.assertEqual(machine.cpu_capability, 57.0)
 
     def test_detect_inventory_honors_a_table_override(self):
         config = config_module.Config(
@@ -331,9 +431,9 @@ class DisplayTests(unittest.TestCase):
 
     def test_gpu_display_carries_the_tier(self):
         gpu = inventory.Gpu("GeForce RTX 3060", 12 * inventory.GIB, "nvml",
-                            "", 55.0)
+                            "", 43.0)
         self.assertEqual(
-            gpu.display(), "GeForce RTX 3060 (12.0 GiB VRAM, mid-range 55/100)"
+            gpu.display(), "GeForce RTX 3060 (12.0 GiB VRAM, mid-range 43/100)"
         )
 
     def test_gpu_display_says_unknown_when_unranked(self):
@@ -342,10 +442,10 @@ class DisplayTests(unittest.TestCase):
 
     def test_cpu_line_carries_the_tier(self):
         machine = inventory.Inventory(
-            cpu_name="AMD Ryzen 5 3600", cpu_ghz=3.6, cpu_capability=45.0
+            cpu_name="AMD Ryzen 5 3600", cpu_ghz=3.6, cpu_capability=57.0
         )
         lines = dict(machine.lines())
-        self.assertEqual(lines["CPU"], "AMD Ryzen 5 3600 @ 3.6 GHz (entry-level 45/100)")
+        self.assertEqual(lines["CPU"], "AMD Ryzen 5 3600 @ 3.6 GHz (mid-range 57/100)")
 
     def test_an_unknown_cpu_stays_unknown(self):
         lines = dict(inventory.Inventory().lines())

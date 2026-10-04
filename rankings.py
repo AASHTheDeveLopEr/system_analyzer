@@ -12,17 +12,32 @@ module is the grounding layer that fills that gap, in two roles:
   named part ("GTX 970 or better") is settled by arithmetic against a
   known machine instead of a coin-flip-prone model question.
 
-Provenance: the ordering is informed by publicly available GPU/CPU tier
-lists and generation ordering (which card beat which, which generation
-came after which). The scores are RELATIVE ESTIMATES on a 0-100 scale,
-not benchmarks -- they say "roughly how capable", never "how many
-frames". A part that matches no entry is ``None`` (unknown), and no
-score is ever invented.
+Provenance: the ordering is calibrated against published
+hierarchies -- Tom's Hardware's GPU benchmarks hierarchy
+(2026, which ranks cards as a percentage of the RTX 4090)
+and CPU benchmarks hierarchy (2026, gaming and
+single-threaded), UL Benchmarks' ranked GPU/CPU lists, and
+PassMark single-thread ratios for the older generations the
+modern hierarchies do not cover. The scores are RELATIVE
+ESTIMATES on a 0-100 scale, not benchmarks -- they say
+"roughly how capable", never "how many frames". A part that
+matches no entry is ``None`` (unknown), and no score is
+ever invented.
 
-Anchors (so the scale can be reasoned about): the current flagship
-discrete GPU is ~100 (RTX 5090 class), an RTX 4060 is ~55-60, a GTX
-1060 is ~35, a GTX 970 is ~28, a GeForce 610M is ~8. On the CPU side:
-the current flagship is ~100, a Ryzen 5 3600 is ~45, an i5-2450M is ~10.
+Anchors (so the scale can be reasoned about): the current
+flagship discrete GPU is 100 (RTX 5090), an RTX 4060 is
+~50, a GTX 1060 is ~25, a GTX 970 is ~18, a GeForce 610M
+is ~6. On the CPU side: the current flagship is ~100 (the
+Ryzen 7 9850X3D/9950X3D class), a Ryzen 5 3600 is ~57, an
+i5-2450M is ~21.
+
+Modern CPUs are scored as a blend of gaming, single-thread
+and multithreaded capability; older ones by single-thread
+ratio with a multithread adjustment, so a 16-core chip is
+not rated like a 4-core at the same clock. Apple silicon
+entries (both tables) are approximate, derived from
+single/multi-thread and Metal ratios rather than a direct
+hierarchy.
 
 Mobile and laptop GPU variants are mapped to their desktop equivalent
 with a documented penalty (x0.8, rounded to one decimal): a laptop
@@ -77,183 +92,466 @@ _MOBILE_TOKENS = frozenset({"mobile", "laptop", "notebook", "maxq", "m"})
 # only has to normalize to the same tokens as the name being looked up.
 
 #: Desktop and mobile discrete GPUs, 2013-2026, plus the integrated
-#: adapters common enough to anchor the low end.
+#: adapters common enough to anchor the low end. Scores follow
+#: Tom's Hardware's 2026 GPU hierarchy (a card's measured
+#: percentage of an RTX 4090), rescaled so the RTX 5090 is 100;
+#: generations the hierarchy does not cover (RTX 50 series, RX
+#: 9000 series, Arc Battlemage, Apple silicon) are placed from
+#: UL Benchmarks' rankings and review-class comparisons.
 GPU_RANKINGS: tuple[tuple[str, float], ...] = (
-    # NVIDIA GeForce RTX 50 series (2025)
+    # NVIDIA GeForce RTX 50 series (2025-2026)
     ("RTX 5090", 100.0),
-    ("RTX 5080", 92.0),
-    ("RTX 5070 Ti", 86.0),
-    ("RTX 5070", 80.0),
-    ("RTX 5060", 62.0),
+    ("RTX 5080", 94.0),
+    ("RTX 5070 Ti", 88.0),
+    ("RTX 5070", 83.0),
+    ("RTX 5060 Ti", 68.0),
+    ("RTX 5060", 52.0),
+    ("RTX 5050", 46.0),
     # NVIDIA GeForce RTX 40 series (2022-2023)
-    ("RTX 4090", 98.0),
-    ("RTX 4080", 88.0),
-    ("RTX 4070 Ti Super", 82.0),
-    ("RTX 4070", 70.0),
-    ("RTX 4060 Ti", 64.0),
-    ("RTX 4060", 58.0),
+    ("RTX 4090", 93.0),
+    ("RTX 4080 Super", 90.0),
+    ("RTX 4080", 89.0),
+    ("RTX 4070 Ti Super", 86.0),
+    ("RTX 4070 Super", 83.0),
+    ("RTX 4070 Ti", 81.0),
+    ("RTX 4070", 74.0),
+    ("RTX 4060 Ti", 61.0),
+    ("RTX 4060", 50.0),
     # NVIDIA GeForce RTX 30 series (2020-2022)
-    ("RTX 3090", 86.0),
-    ("RTX 3080", 76.0),
-    ("RTX 3070", 66.0),
-    ("RTX 3060 Ti", 60.0),
-    ("RTX 3060", 55.0),
-    ("RTX 3050", 44.0),
+    ("RTX 3090 Ti", 81.0),
+    ("RTX 3090", 79.0),
+    ("RTX 3080 Ti", 76.0),
+    ("RTX 3080 12GB", 75.0),
+    ("RTX 3080", 71.0),
+    ("RTX 3070 Ti", 63.0),
+    ("RTX 3070", 58.0),
+    ("RTX 3060 Ti", 52.0),
+    ("RTX 3060", 43.0),
+    ("RTX 3050 Ti", 40.0),
+    ("RTX 3050", 38.0),
     # NVIDIA GeForce RTX 20 series (2018-2019)
-    ("RTX 2080 Ti", 66.0),
-    ("RTX 2080", 60.0),
-    ("RTX 2070", 52.0),
+    ("RTX 2080 Ti", 60.0),
+    ("RTX 2080 Super", 57.0),
+    ("RTX 2080", 56.0),
+    ("RTX 2070 Super", 51.0),
+    ("RTX 2070", 49.0),
+    ("RTX 2060 Super", 46.0),
     ("RTX 2060", 42.0),
     # NVIDIA GeForce GTX 16 series (2019)
-    ("GTX 1660 Super", 38.0),
-    ("GTX 1660", 34.0),
-    ("GTX 1650", 26.0),
+    ("GTX 1660 Super", 37.0),
+    ("GTX 1660 Ti", 36.0),
+    ("GTX 1660", 33.0),
+    ("GTX 1650 Super", 24.0),
+    ("GTX 1650", 23.0),
     # NVIDIA GeForce GTX 10 series (2016-2017)
-    ("GTX 1080 Ti", 46.0),
-    ("GTX 1080", 40.0),
-    ("GTX 1070", 36.0),
-    ("GTX 1060", 35.0),
-    ("GTX 1050 Ti", 28.0),
+    ("GTX 1080 Ti", 39.0),
+    ("GTX 1080", 35.0),
+    ("GTX 1070 Ti", 33.0),
+    ("GTX 1070", 31.0),
+    ("GTX 1060", 25.0),
+    ("GTX 1050 Ti", 18.0),
+    ("GTX 1050", 15.0),
+    ("GT 1030", 12.0),
     # NVIDIA GeForce GTX 900 series (2014-2015)
-    ("GTX 980 Ti", 30.0),
-    ("GTX 980", 29.0),
-    ("GTX 970", 28.0),
+    ("GTX 980 Ti", 22.0),
+    ("GTX 980", 20.0),
+    ("GTX 970", 18.0),
+    ("GTX 960", 15.0),
+    ("GTX 950", 13.0),
     # NVIDIA GeForce GTX 700 series (2013-2014)
-    ("GTX 780 Ti", 27.0),
-    ("GTX 770", 23.0),
-    ("GTX 750 Ti", 15.0),
-    # Legacy low-end discrete
-    ("GeForce 610M", 8.0),
-    ("GT 1030", 16.0),
+    ("GTX 780 Ti", 16.0),
+    ("GTX 780", 14.0),
+    ("GTX 770", 13.0),
+    ("GTX 760", 12.0),
+    ("GTX 750 Ti", 8.0),
+    ("GTX 750", 7.0),
+    ("GTX 745", 6.0),
+    # NVIDIA mobile-only parts (no desktop equivalent)
+    ("GeForce 610M", 6.0),
+    ("GT 750M", 10.0),
+    ("GT 740M", 9.0),
+    ("GT 730M", 7.0),
+    ("GT 720M", 6.0),
+    ("GT 635M", 7.0),
+    ("GT 630M", 6.0),
+    ("GT 620M", 5.0),
+    ("GT 610M", 5.0),
+    ("GTX 960M", 12.0),
+    ("GTX 950M", 9.0),
+    ("GTX 940M", 7.0),
+    ("GTX 860M", 11.0),
+    ("GTX 850M", 8.0),
+    ("GTX 770M", 11.0),
+    ("GTX 760M", 10.0),
+    ("GTX 765M", 9.0),
+    ("MX570", 18.0),
+    ("MX550", 16.0),
+    ("MX450", 14.0),
+    ("MX350", 11.0),
+    ("MX250", 8.0),
+    ("MX150", 8.0),
+    ("MX130", 6.0),
+    ("MX110", 5.0),
     # AMD Radeon RX 9000 series (2025)
-    ("RX 9070 XT", 90.0),
-    ("RX 9070", 84.0),
+    ("RX 9070 XT", 89.0),
+    ("RX 9070", 85.0),
+    ("RX 9070 GRE", 78.0),
+    ("RX 9060 XT", 68.0),
+    ("RX 9060", 59.0),
     # AMD Radeon RX 7000 series (2022-2023)
-    ("RX 7900 XTX", 84.0),
-    ("RX 7800 XT", 70.0),
-    ("RX 7600", 50.0),
+    ("RX 7900 XTX", 90.0),
+    ("RX 7900 XT", 87.0),
+    ("RX 7900 GRE", 82.0),
+    ("RX 7800 XT", 78.0),
+    ("RX 7700 XT", 70.0),
+    ("RX 7600 XT", 48.0),
+    ("RX 7600", 47.0),
     # AMD Radeon RX 6000 series (2020-2021)
-    ("RX 6900 XT", 74.0),
-    ("RX 6800 XT", 70.0),
-    ("RX 6700 XT", 58.0),
+    ("RX 6950 XT", 79.0),
+    ("RX 6900 XT", 75.0),
+    ("RX 6800 XT", 74.0),
+    ("RX 6800", 69.0),
+    ("RX 6750 XT", 62.0),
+    ("RX 6700 XT", 60.0),
+    ("RX 6650 XT", 55.0),
+    ("RX 6600 XT", 52.0),
+    ("RX 6600", 39.0),
     # AMD Radeon RX 5000 series (2019)
-    ("RX 590", 31.0),
-    ("RX 580", 29.0),
-    # AMD Radeon RX 4000 series (2016)
-    ("RX 480", 30.0),
-    ("RX 460", 17.0),
-    # Intel Arc (2022-2024)
-    ("Arc A770", 55.0),
-    ("Arc A750", 50.0),
-    ("Arc A380", 32.0),
-    # Apple silicon GPU tiers (reported as the chip name on macOS)
-    ("Apple M4", 58.0),
-    ("Apple M3", 50.0),
-    ("Apple M2", 40.0),
-    ("Apple M1", 32.0),
+    ("RX 5700 XT", 44.0),
+    ("RX 5700", 40.0),
+    ("RX 5600 XT", 36.0),
+    ("RX 5500 XT", 28.0),
+    # AMD Radeon RX 500/400 series (2016-2017)
+    ("RX 590", 29.0),
+    ("RX 580", 27.0),
+    ("RX 570", 25.0),
+    ("RX 560", 19.0),
+    ("RX 550", 14.0),
+    ("RX 480", 26.0),
+    ("RX 470", 25.0),
+    ("RX 460", 16.0),
+    # AMD Radeon Vega (2017) and R9 (2013-2014)
+    ("RX Vega 64", 40.0),
+    ("RX Vega 56", 36.0),
+    ("R9 390X", 27.0),
+    ("R9 390", 26.0),
+    ("R9 380", 21.0),
+    ("R9 290X", 24.0),
+    ("R9 290", 21.0),
+    ("R9 280", 19.0),
+    # Intel Arc Alchemist (2022-2024) and Battlemage (2025)
+    ("Arc B580", 52.0),
+    ("Arc B570", 48.0),
+    ("Arc B390", 40.0),
+    ("Arc A770", 45.0),
+    ("Arc A750", 42.0),
+    ("Arc A580", 39.0),
+    ("Arc A380", 20.0),
+    # Apple silicon GPU tiers (reported as the chip name on
+    # macOS). Approximate: Metal-benchmark ratios against the
+    # discrete cards above, not a measured hierarchy.
+    ("Apple M4 Ultra", 85.0),
+    ("Apple M4 Max", 72.0),
+    ("Apple M4 Pro", 50.0),
+    ("Apple M4", 38.0),
+    ("Apple M3 Max", 56.0),
+    ("Apple M3 Pro", 45.0),
+    ("Apple M3", 32.0),
+    ("Apple M2 Ultra", 76.0),
+    ("Apple M2 Max", 43.0),
+    ("Apple M2 Pro", 42.0),
+    ("Apple M2", 26.0),
+    ("Apple M1 Ultra", 71.0),
+    ("Apple M1 Max", 44.0),
+    ("Apple M1 Pro", 30.0),
+    ("Apple M1", 18.0),
     # Common Intel integrated graphics, the low anchors
-    ("Iris Xe Graphics", 24.0),
-    ("UHD Graphics 770", 20.0),
-    ("UHD Graphics 630", 14.0),
-    ("UHD Graphics 620", 13.0),
-    ("HD Graphics 630", 12.0),
-    ("HD Graphics 3000", 5.0),
+    ("Iris Xe Graphics", 16.0),
+    ("Iris Plus 655", 13.0),
+    ("Iris Plus 640", 12.0),
+    ("Iris Plus 630", 11.0),
+    ("Iris Pro 5200", 11.0),
+    ("UHD Graphics 770", 12.0),
+    ("UHD Graphics 750", 11.0),
+    ("UHD Graphics 740", 10.0),
+    ("UHD Graphics 730", 10.0),
+    ("UHD Graphics 710", 9.0),
+    ("UHD Graphics 630", 9.0),
+    ("UHD Graphics 620", 8.0),
+    ("UHD Graphics 610", 6.0),
+    ("UHD Graphics 600", 5.0),
+    ("UHD Graphics 520", 7.0),
+    ("UHD Graphics 510", 5.0),
+    ("HD Graphics 630", 9.0),
+    ("HD Graphics 620", 7.0),
+    ("HD Graphics 610", 5.0),
+    ("HD Graphics 530", 7.0),
+    ("HD Graphics 520", 6.0),
+    ("HD Graphics 510", 5.0),
+    ("HD Graphics 4600", 4.0),
+    ("HD Graphics 4400", 3.0),
+    ("HD Graphics 3000", 3.0),
+    ("HD Graphics 2500", 2.0),
 )
 
-#: CPUs of the last ~8 years plus the low anchors. Mobile-only parts
-#: (the i5-2450M class) are entries in their own right because no
-#: desktop equivalent exists to penalize.
+#: Desktop and mobile CPUs, 2011-2026, plus the low anchors.
+#: Modern chips (2022+) are a blend of Tom's Hardware's 2026
+#: gaming and single-thread hierarchies with a multithread
+#: term; older ones are PassMark single-thread ratios with a
+#: multithread adjustment, so core count still counts. A few
+#: mobile-only parts (the i5-2450M class) are entries in
+#: their own right because no desktop equivalent exists.
 CPU_RANKINGS: tuple[tuple[str, float], ...] = (
+    # AMD Ryzen 9000 series, Zen 5 (2024-2025) -- the top
+    ("Ryzen 9 9950X3D", 100.0),
+    ("Ryzen 7 9850X3D", 99.0),
+    ("Ryzen 9 9900X3D", 97.0),
+    ("Ryzen 9 9950X", 94.0),
+    ("Ryzen 7 9800X3D", 98.0),
+    ("Ryzen 9 9900X", 93.0),
+    ("Ryzen 7 9700X", 86.0),
+    ("Ryzen 5 9600X", 83.0),
+    # Intel Core Ultra 200 series, Arrow Lake (2024)
+    ("Core Ultra 7 270K Plus", 97.0),
+    ("Core Ultra 5 250K Plus", 94.0),
+    ("Core Ultra 7 270K", 94.0),    ("Core Ultra 9 285K", 94.0),    ("Core Ultra 7 265K", 89.0),
+    ("Core Ultra 5 250K", 91.0),
+    ("Core Ultra 5 225", 87.0),
+    ("Core Ultra 5 245K", 86.0),
     # Intel Core 14th generation (2023)
-    ("Core i9-14900K", 96.0),
+    ("Core i9-14900KS", 95.0),
+    ("Core i9-14900K", 90.0),
     ("Core i7-14700K", 88.0),
-    ("Core i5-14600K", 78.0),
+    ("Core i7-14700", 87.0),
+    ("Core i5-14600K", 84.0),
+    ("Core i5-14500", 76.0),
+    ("Core i5-14400", 73.0),
+    ("Core i3-14100", 51.0),
     # Intel Core 13th generation (2022-2023)
-    ("Core i9-13900K", 94.0),
-    ("Core i7-13700K", 86.0),
-    ("Core i5-13600K", 76.0),
+    ("Core i9-13900KS", 93.0),
+    ("Core i9-13900K", 89.0),
+    ("Core i9-13900", 89.0),
+    ("Core i7-13700K", 85.0),
+    ("Core i7-13700", 83.0),
+    ("Core i5-13600K", 84.0),
+    ("Core i5-13500", 79.0),
+    ("Core i5-13400", 76.0),
+    ("Core i3-13100", 50.0),
     # Intel Core 12th generation (2021-2022)
     ("Core i9-12900K", 90.0),
+    ("Core i9-12900", 86.0),
     ("Core i7-12700K", 82.0),
-    ("Core i5-12600K", 72.0),
-    # Intel Core 11th generation (2020-2021)
-    ("Core i9-11900K", 80.0),
-    ("Core i7-11700K", 74.0),
-    ("Core i5-11600K", 64.0),
-    ("Core i5-1135G7", 62.0),
-    # Intel Core 10th generation (2019-2020)
-    ("Core i9-10900K", 74.0),
-    ("Core i7-10700K", 68.0),
-    ("Core i5-10400", 60.0),
-    # Intel Core 9th generation (2018-2019)
-    ("Core i9-9900K", 62.0),
-    ("Core i7-9700K", 58.0),
-    ("Core i5-9400", 52.0),
-    # Intel Core 8th generation (2017-2018)
-    ("Core i7-8700", 54.0),
-    ("Core i5-8400", 48.0),
-    # Intel Core 7th generation (2016-2017)
-    ("Core i7-7700", 46.0),
-    ("Core i5-7400", 40.0),
-    # Intel Core 6th generation (2015-2016)
-    ("Core i7-6700", 44.0),
-    ("Core i5-6400", 38.0),
-    # Intel Core 4th generation (2013-2014)
-    ("Core i7-4790", 36.0),
-    ("Core i5-4460", 30.0),
-    # Intel Core 2nd generation, mobile-only (2011-2012)
-    ("Core i7-2670QM", 12.0),
-    ("Core i5-2450M", 10.0),
-    # Intel Core i3 (the low end of each generation)
-    ("Core i3-12100", 56.0),
-    ("Core i3-10100", 44.0),
-    ("Core i3-9100", 40.0),
-    ("Core i3-8100", 38.0),
-    # Intel Celeron / Pentium / Atom, the floor
-    ("Pentium Gold G7400", 10.0),
-    ("Celeron G5905", 6.0),
-    ("Atom x5-Z8350", 4.0),
-    # AMD Ryzen 9000 series (2024)
-    ("Ryzen 9 9950X", 100.0),
-    ("Ryzen 7 9800X", 92.0),
-    # AMD Ryzen 7000 series (2022-2023)
-    ("Ryzen 9 7950X", 94.0),
+    ("Core i7-12700", 80.0),
+    ("Core i5-12600K", 73.0),
+    ("Core i5-12500", 74.0),
+    ("Core i5-12400", 69.0),
+    ("Core i3-12100", 49.0),
+    # AMD Ryzen 7000 series, Zen 4 (2022-2023)
+    ("Ryzen 9 7950X3D", 95.0),
+    ("Ryzen 9 7900X3D", 93.0),
+    ("Ryzen 7 7800X3D", 85.0),
+    ("Ryzen 9 7950X", 87.0),
+    ("Ryzen 9 7900X", 88.0),
+    ("Ryzen 9 7900", 85.0),
     ("Ryzen 7 7700X", 86.0),
-    ("Ryzen 5 7600", 80.0),
-    # AMD Ryzen 5000 series (2020-2021)
-    ("Ryzen 9 5950X", 82.0),
-    ("Ryzen 9 5900X", 80.0),
-    ("Ryzen 7 5800X", 76.0),
-    ("Ryzen 7 5700X", 74.0),
-    ("Ryzen 5 5600X", 70.0),
-    ("Ryzen 5 5600", 68.0),
-    # AMD Ryzen 3000 series (2019-2020)
-    ("Ryzen 9 3950X", 72.0),
-    ("Ryzen 9 3900X", 68.0),
-    ("Ryzen 7 3700X", 62.0),
-    ("Ryzen 5 3600X", 47.0),
-    ("Ryzen 5 3600", 45.0),
-    ("Ryzen 3 3200G", 30.0),
-    # AMD Ryzen 2000 series (2018)
-    ("Ryzen 7 2700X", 48.0),
-    ("Ryzen 5 2600", 40.0),
-    ("Ryzen 3 2200G", 26.0),
-    # AMD Ryzen 1000 series (2017)
-    ("Ryzen 5 1600", 34.0),
-    # Apple M-series (the chip name is what the platform reports)
-    ("Apple M4", 88.0),
-    ("Apple M3", 76.0),
-    ("Apple M2", 62.0),
-    ("Apple M1", 52.0),
+    ("Ryzen 7 7700", 84.0),
+    ("Ryzen 5 7600X", 80.0),
+    ("Ryzen 5 7600", 78.0),
+    ("Ryzen 5 7500F", 76.0),
+    ("Ryzen 5 7600X3D", 84.0),
+    # Intel Core 11th generation (2020-2021)
+    ("Core i9-11900K", 78.0),
+    ("Core i7-11700K", 74.0),
+    ("Core i7-11700", 71.0),
+    ("Core i5-11600K", 66.0),
+    ("Core i5-11400", 64.0),
+    # Common Intel laptop chips (Tiger Lake and successors)
+    ("Core i7-1185G7", 70.0),
+    ("Core i7-11800H", 72.0),
+    ("Core i7-1165G7", 68.0),
+    ("Core i5-1135G7", 62.0),
+    ("Core i5-1130G7", 60.0),
+    # Intel Core 10th generation (2019-2020)
+    ("Core i9-10900K", 75.0),
+    ("Core i9-10900", 73.0),
+    ("Core i7-10700K", 71.0),
+    ("Core i7-10700", 69.0),
+    ("Core i5-10600K", 69.0),
+    ("Core i5-10500", 65.0),
+    ("Core i5-10400", 62.0),
+    ("Core i3-10100", 52.0),
+    ("Ryzen 9 5950X", 87.0),
+    ("Ryzen 9 5900X", 85.0),
+    ("Ryzen 7 5800X3D", 72.0),
+    ("Ryzen 7 5800X", 71.0),
+    ("Ryzen 7 5700X", 73.0),
+    ("Ryzen 5 5600X", 65.0),
+    ("Ryzen 5 5600", 63.0),
+    ("Ryzen 5 5500", 62.0),
+    # Intel Core 9th generation (2018-2019)
+    ("Core i9-9900K", 70.0),
+    ("Core i9-9900", 67.0),
+    ("Core i7-9700K", 67.0),
+    ("Core i7-9700", 65.0),
+    ("Core i5-9600K", 64.0),
+    ("Core i5-9400", 62.0),
+    ("Core i3-9100", 55.0),
+    ("Core i7-8700K", 65.0),
+    ("Core i7-8700", 64.0),
+    ("Core i5-8600K", 62.0),
+    ("Core i5-8500", 60.0),
+    ("Core i5-8400", 58.0),
+    ("Core i3-8300", 56.0),
+    ("Core i3-8100", 54.0),
+    # AMD Ryzen 3000 series, Zen 2 (2019-2020)
+    ("Ryzen 9 3950X", 81.0),
+    ("Ryzen 9 3900X", 79.0),
+    ("Ryzen 7 3800X", 75.0),
+    ("Ryzen 7 3700X", 71.0),
+    ("Ryzen 5 3600X", 58.0),
+    ("Ryzen 5 3600", 57.0),
+    ("Ryzen 3 3300X", 49.0),
+    ("Ryzen 3 3200G", 38.0),
+    # Intel Core 7th generation (2016-2017)
+    ("Core i7-7700K", 56.0),
+    ("Core i7-7700", 61.0),
+    ("Core i5-7600K", 60.0),
+    ("Core i5-7500", 56.0),
+    ("Core i5-7400", 54.0),
+    ("Core i3-7300", 52.0),
+    ("Core i3-7100", 48.0),
+    # Intel Core 6th generation (2015-2016)
+    ("Core i7-6700K", 55.0),
+    ("Core i7-6700", 57.0),
+    ("Core i5-6600K", 56.0),
+    ("Core i5-6500", 54.0),
+    ("Core i5-6400", 52.0),
+    ("Core i3-6100", 48.0),
+    # Intel Core 4th generation (2013-2014)
+    ("Core i7-4790K", 47.0),
+    ("Core i7-4790", 46.0),
+    ("Core i7-4770", 45.0),
+    ("Core i5-4690", 44.0),
+    ("Core i5-4590", 42.0),
+    ("Core i5-4460", 42.0),
+    ("Core i3-4130", 35.0),
+    ("Core i3-4160", 35.0),
+    # Intel Core 3rd generation (2012)
+    ("Core i7-3770K", 43.0),
+    ("Core i7-3770", 42.0),
+    ("Core i5-3570K", 40.0),
+    ("Core i5-3570", 40.0),
+    ("Core i5-3470", 38.0),
+    ("Core i3-3220", 31.0),
+    ("Core i3-3210", 30.0),
+    # Intel Core 2nd generation, the Sandy Bridge era (2011)
+    ("Core i7-2600K", 37.0),
+    ("Core i7-2600", 36.0),
+    ("Core i7-2670QM", 23.0),
+    ("Core i5-2500K", 35.0),
+    ("Core i5-2500", 34.0),
+    ("Core i5-2400", 34.0),
+    ("Core i5-2450M", 21.0),
+    ("Core i3-2120", 27.0),
+    ("Core i3-2100", 26.0),
+    # AMD Ryzen 2000 series, Zen+ (2018)
+    ("Ryzen 7 2700X", 36.0),
+    ("Ryzen 5 2600X", 40.0),
+    ("Ryzen 5 2600", 38.0),
+    ("Ryzen 5 2500X", 37.0),
+    ("Ryzen 5 2400G", 33.0),
+    ("Ryzen 3 2200G", 30.0),
+    # AMD Ryzen 1000 series, Zen 1 (2017)
+    ("Ryzen 7 1800X", 33.0),
+    ("Ryzen 7 1700X", 32.0),
+    ("Ryzen 7 1700", 31.0),
+    ("Ryzen 5 1600X", 33.0),
+    ("Ryzen 5 1600", 31.0),
+    ("Ryzen 5 1500X", 30.0),
+    ("Ryzen 5 1400", 29.0),
+    ("Ryzen 3 1300X", 26.0),
+    ("Ryzen 3 1200", 24.0),
+    # Intel Core i3 (the low end of each generation)
+    ("Core i3-10100", 52.0),
+    ("Core i3-9100", 55.0),
+    ("Core i3-8100", 54.0),
+    # Common Intel laptop chips (Alder Lake and newer)
+    ("Core i7-1355U", 70.0),
+    ("Core i7-1365U", 72.0),
+    ("Core i7-13700H", 82.0),
+    ("Core i7-14700H", 85.0),
+    ("Core i9-13900H", 88.0),
+    ("Core i9-14900H", 90.0),
+    ("Core i7-1255U", 68.0),
+    ("Core i7-1265U", 70.0),
+    ("Core i7-12700H", 78.0),
+    ("Core i5-1335U", 66.0),
+    ("Core i5-1345U", 68.0),
+    ("Core i5-13500H", 74.0),
+    ("Core i5-1235U", 64.0),
+    ("Core i5-1245U", 66.0),
+    ("Core i5-12500H", 70.0),
+    ("Core i5-1435U", 66.0),
+    ("Core i5-1445U", 68.0),
+    # Common AMD laptop chips (Zen 3+ and newer)
+    ("Ryzen 9 7940HS", 88.0),
+    ("Ryzen 9 8945HS", 88.0),
+    ("Ryzen 7 8845HS", 82.0),
+    ("Ryzen 7 7840HS", 82.0),
+    ("Ryzen 7 7840U", 78.0),
+    ("Ryzen 7 7730U", 70.0),
+    ("Ryzen 7 7735U", 70.0),
+    ("Ryzen 5 7640U", 72.0),
+    ("Ryzen 5 7530U", 62.0),
+    ("Ryzen 5 7535U", 62.0),
+    ("Ryzen 7 7700S", 84.0),
+    ("Ryzen 5 7600GE", 74.0),
+    ("Ryzen 7 8700G", 72.0),
+    ("Ryzen 5 8600G", 66.0),
+    ("Ryzen 5 8500G", 62.0),
+    # Intel Celeron / Pentium / Atom, the floor
+    ("Core i3-N305", 40.0),
+    ("Pentium Gold G7400", 20.0),
+    ("Pentium Gold G6400", 25.0),
+    ("Pentium Silver N6000", 21.0),
+    ("Pentium Silver N5100", 19.0),
+    ("Celeron G5905", 17.0),
+    ("Celeron G5900", 16.0),
+    ("Celeron G4900", 16.0),
+    ("Celeron N4500", 16.0),
+    ("Celeron N4020", 13.0),
+    ("Atom x7-Z8750", 11.0),
+    ("Atom x5-Z8350", 9.0),
+    # Apple M-series (the chip name is what the platform
+    # reports). Approximate: single/multi-thread ratios
+    # against the Intel chips above, not a measured hierarchy.
+    ("Apple M4 Ultra", 94.0),
+    ("Apple M4 Max", 78.0),
+    ("Apple M4 Pro", 71.0),
+    ("Apple M4", 63.0),
+    ("Apple M3 Max", 62.0),
+    ("Apple M3 Pro", 57.0),
+    ("Apple M3", 52.0),
+    ("Apple M2 Ultra", 60.0),
+    ("Apple M2 Max", 53.0),
+    ("Apple M2 Pro", 49.0),
+    ("Apple M2", 43.0),
+    ("Apple M1 Ultra", 43.0),
+    ("Apple M1 Max", 41.0),
+    ("Apple M1 Pro", 38.0),
+    ("Apple M1", 33.0),
 )
 
 #: Capability bands, high to low. The word describes where a part sits
-#: relative to everything else in its table, today, not in its own era.
+#: relative to everything else in its table, today, not in its own
+#: era. The thresholds sit between the tiers of the current tables:
+#: the RTX 3060 class is the middle of the pack, the GTX 1060
+#: class is entry-level, and the decade-old chips are low-end.
 _TIERS: tuple[tuple[float, str], ...] = (
     (90.0, "flagship"),
     (70.0, "high-end"),
-    (50.0, "mid-range"),
-    (30.0, "entry-level"),
+    (40.0, "mid-range"),
+    (10.0, "entry-level"),
     (0.0, "low-end"),
 )
 
@@ -414,6 +712,13 @@ def _tokens(name: str) -> list[str]:
             continue
         if result and result[-1] == "max" and token == "q":
             result[-1] = "maxq"
+        elif (token.endswith("f") and len(token) > 1
+              and token[0].isdigit()):
+            # An "F" SKU is the same chip without integrated
+            # graphics ("Core i5-12400F" vs "Core i5-12400",
+            # "Core i7-13700KF" vs "Core i7-13700K"): the same
+            # capability, so the F folds away.
+            result.append(token[:-1])
         else:
             result.append(token)
     return result
@@ -442,7 +747,13 @@ def _laptop_adjusted(score: float, mobile: bool) -> float:
 def _nearest_anchor(
     score: float, table: tuple[tuple[str, float], ...]
 ) -> tuple[str, float]:
-    """The table entry whose score is closest to *score*."""
+    """The table entry whose score is closest to *score*.
+
+    Ties (two entries at the same score) go to the earlier
+    entry in the table, so an anchor that sits at the head of
+    its class ("GTX 1060" above the "GTX 1650 Super") wins
+    over one listed later.
+    """
     best_pattern = ""
     best_score = 0.0
     best_distance = float("inf")

@@ -299,12 +299,12 @@ class PrivacyTests(unittest.TestCase):
         """The tier is what every model call receives as grounding."""
         state = inventory.Inventory(
             cpu_name="AMD Ryzen 5 3600",
-            cpu_capability=45.0,
+            cpu_capability=57.0,
             gpus=(inventory.Gpu("NVIDIA GeForce RTX 3060", 12 * inventory.GIB,
-                                "nvml", "", 55.0),),
+                                "nvml", "", 43.0),),
         ).to_state()
-        self.assertEqual(state["cpu"]["capability_score"], 45.0)
-        self.assertEqual(state["gpus"][0]["capability_score"], 55.0)
+        self.assertEqual(state["cpu"]["capability_score"], 57.0)
+        self.assertEqual(state["gpus"][0]["capability_score"], 43.0)
 
 
 class MenuTests(unittest.TestCase):
