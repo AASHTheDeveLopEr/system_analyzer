@@ -15,8 +15,9 @@ import unittest
 
 import requirements
 import system_one
+from requirements import CheckItem
 from system_one import Decision
-from tests._helpers import TempDir
+from tests._helpers import FakeClient, TempDir
 
 STATE = {
     "cpu": {"logical_cores": 4, "clock_ghz": None},
@@ -44,6 +45,29 @@ class StubClient:
         self.calls.append(dict(questions))
         answers = {
             qid: {"type": "noul", "noul": self.per_id.get(qid, self.default)}
+            for qid in questions
+        }
+        return Decision(model="stub", answers=answers, provider="stub", source="local")
+
+
+class FirstBatchFailsClient:
+    """Fails the first ask, answers every later one.
+
+    ``QUESTIONS_PER_CALL`` named parts span two batches with this client,
+    so one batch can fail while another answers -- the partial-success
+    path of the named-part judge.
+    """
+
+    def __init__(self, noul_value: float = 0.9):
+        self.noul_value = noul_value
+        self.calls = 0
+
+    def ask(self, state, questions):
+        self.calls += 1
+        if self.calls == 1:
+            raise system_one.SystemOneError("first batch down")
+        answers = {
+            qid: {"type": "noul", "noul": self.noul_value}
             for qid in questions
         }
         return Decision(model="stub", answers=answers, provider="stub", source="local")
@@ -161,6 +185,40 @@ class NamedPartTests(TempDir):
         self.assertTrue(result.model_unavailable)
         self.assertTrue(any("no System One endpoint" in n for n in result.notes))
         self.assertEqual(result.verdict, "Cannot tell")
+
+    def test_a_client_that_answers_nothing_flags_the_outage(self):
+        """The endpoint exists but every batch failed: that is an outage.
+
+        A present-but-dead client must flag ``model_unavailable`` the
+        same way a missing client does, so the CLI can exit 3.
+        """
+        client = FakeClient(error=system_one.SystemOneError("down"))
+        result = requirements.check_requirements(STATE, "task", "GTX 970", None, client)
+        self.assertTrue(result.model_unavailable)
+        self.assertTrue(any("no System One endpoint" in n for n in result.notes))
+        self.assertEqual(result.verdict, "Cannot tell")
+
+    def test_one_answered_batch_is_not_an_outage(self):
+        """Partial success means the model was there, so no outage flag.
+
+        Nine named parts span two batches; the first fails, the second
+        answers. The answered batch's item carries a real verdict, so
+        ``_judge_named`` reports the model as available.
+        """
+        client = FirstBatchFailsClient()
+        items = [
+            CheckItem(tier="minimum", component="gpu_model",
+                      raw=f"GPU {i}", state="unknown")
+            for i in range(requirements.QUESTIONS_PER_CALL + 1)
+        ]
+        notes: list[str] = []
+        all_failed = requirements._judge_named(
+            items, list(range(len(items))), STATE, client, None, notes
+        )
+        self.assertFalse(all_failed)
+        self.assertEqual([i.state for i in items[:-1]], ["unknown"] * requirements.QUESTIONS_PER_CALL)
+        self.assertEqual(items[-1].state, "passed")
+        self.assertEqual(items[-1].probability, 0.9)
 
     def test_numeric_requirements_pass_even_when_the_model_judges_the_rest(self):
         client = StubClient(0.9)
