@@ -338,8 +338,13 @@ def detect_gpus() -> tuple[Gpu, ...]:
         if _is_software_adapter(name):
             continue
         normalized = _normalize(name)
-        if any(normalized in seen or seen in normalized for seen in known):
-            continue  # pynvml already reported this one, spelled differently
+        # Substring matching is unsafe here: distinct Intel generations
+        # share a name prefix ("Intel UHD Graphics" and "Intel UHD
+        # Graphics 630" are different cards), so a substring test would
+        # silently drop a real adapter. Only an exact normalized-name
+        # match means pynvml already reported this card, spelled differently.
+        if normalized in known:
+            continue
         cards.append(Gpu(name=name, vram_bytes=vram_bytes, source=source, note=note))
         known.append(normalized)
     return tuple(cards)

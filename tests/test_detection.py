@@ -106,6 +106,33 @@ class GpuDetectionTests(unittest.TestCase):
         self.assertEqual(len(names), 2, names)
         self.assertEqual(names[0], "NVIDIA GeForce RTX 3070")
 
+    def test_distinct_intel_generations_are_both_kept(self):
+        """'Intel UHD Graphics' and '... 630' are different cards.
+
+        Intel generations share a name prefix, so a substring dedup would
+        silently drop one of these real adapters.
+        """
+        intel_bare = _fake_gpuinfo("Intel UHD Graphics", vendor="Intel")
+        intel_630 = _fake_gpuinfo("Intel UHD Graphics 630", vendor="Intel")
+        with self._with_platform([], [intel_bare, intel_630], system_name="Windows"):
+            gpus = inventory.detect_gpus()
+
+        names = [gpu.name for gpu in gpus]
+        self.assertEqual(len(names), 2, names)
+        self.assertIn("Intel UHD Graphics", names)
+        self.assertIn("Intel UHD Graphics 630", names)
+
+    def test_the_same_card_from_both_sources_is_deduplicated(self):
+        """Exact normalized-name matching still catches respellings."""
+        nvidia_card = inventory.Gpu(name="NVIDIA GeForce RTX 3070", vram_bytes=8 * inventory.GIB, source="nvml")
+        platform_card = _fake_gpuinfo("GeForce RTX 3070", vendor="NVIDIA")
+        with self._with_platform([nvidia_card], [platform_card], system_name="Windows"):
+            gpus = inventory.detect_gpus()
+
+        self.assertEqual(len(gpus), 1)
+        # pynvml's entry is preferred: it is the one with honest VRAM.
+        self.assertEqual(gpus[0].source, "nvml")
+
     def test_software_adapters_are_dropped(self):
         """A VM has no real GPU, so 'unknown' is recorded rather than invented."""
         software1 = _fake_gpuinfo("Microsoft Basic Render Driver", vendor="Microsoft")
