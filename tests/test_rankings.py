@@ -139,8 +139,8 @@ class RequirementCheckTests(TempDir):
         item = result.items[0]
         self.assertEqual(item.state, "passed")
         self.assertEqual(item.path, "tier-table")
-        self.assertIn("GTX 970 ≈ 28/100", item.detail)
-        self.assertIn("RTX 3060 ≈ 55/100", item.detail)
+        self.assertIn("GTX 970 ~ 28/100", item.detail)
+        self.assertIn("RTX 3060 ~ 55/100", item.detail)
         self.assertIn("curated tier table v", item.detail)
         self.assertEqual(client.calls, [])  # no model call was spent
 
@@ -152,8 +152,8 @@ class RequirementCheckTests(TempDir):
         item = result.items[0]
         self.assertEqual(item.state, "failed")
         self.assertEqual(item.path, "tier-table")
-        self.assertIn("RTX 4080 ≈ 88/100", item.detail)
-        self.assertIn("RTX 3060 ≈ 55/100", item.detail)
+        self.assertIn("RTX 4080 ~ 88/100", item.detail)
+        self.assertIn("RTX 3060 ~ 55/100", item.detail)
         self.assertEqual(result.verdict, "Below the minimum")
         self.assertEqual(client.calls, [])
 

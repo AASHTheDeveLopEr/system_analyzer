@@ -351,8 +351,8 @@ def _check_named_tier(
         tier=tier, component=requirement.component, raw=requirement.raw,
         state="passed" if passed else "failed", path="tier-table",
         detail=(
-            f"{required_name} ≈ {required_score:g}/100 vs this machine's "
-            f"{machine_name} ≈ {machine_score:g}/100 "
+            f"{required_name} ~ {required_score:g}/100 vs this machine's "
+            f"{machine_name} ~ {machine_score:g}/100 "
             f"(curated tier table v{rankings.RANKINGS_VERSION})"
         ),
     )
