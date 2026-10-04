@@ -290,7 +290,12 @@ def _rate_repeated(
         reporter.say(f"  tiers seen : {', '.join(sorted(b for b in bands if b)) or 'unknown'}")
         reporter.say(f"  stable     : {'yes' if stable else 'no'} (tolerance {tolerance})")
         reporter.say("")
-    return EXIT_OK
+    # A degraded rating is not "answered": the single-run path exits 3
+    # when the method fell back to rules. A repeated run counts as
+    # degraded when *any* run fell back -- a run that reached a model
+    # first and then lost it is still a degraded answer, not a clean
+    # one, so the exit code must say so.
+    return EXIT_NO_MODEL if any(r.method == "rules" for r in results) else EXIT_OK
 
 
 def _print_verdict(verdict: Any, reporter: Reporter) -> None:
@@ -689,10 +694,15 @@ def _run_checklist(
         reporter.data(result.to_dict())
     else:
         _print_checklist(result, reporter)
-    if result.verdict == "Cannot tell":
-        return EXIT_UNGROUNDED, result
+    # A full outage leaves every named part unknown, which composes
+    # to the "Cannot tell" verdict -- but the reason nothing could be
+    # judged is that no endpoint answered, and that is what the exit
+    # code must report. Only when the model *did* answer and still
+    # could not decide is the question itself ungrounded.
     if result.model_unavailable:
         return EXIT_NO_MODEL, result
+    if result.verdict == "Cannot tell":
+        return EXIT_UNGROUNDED, result
     return EXIT_OK, result
 
 

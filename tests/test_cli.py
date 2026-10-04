@@ -35,6 +35,30 @@ def rating_answers(value: float = 0.5) -> dict:
     return {"overall_tier": score(value, {"0": "Entry level", "4": "Workstation"})}
 
 
+class FlakyClient:
+    """Answers the first call, then goes offline.
+
+    A repeated rating where run 1 reached the model and the runs
+    after it fell back to rules: the answer is degraded, so the
+    exit code has to say so rather than claim a clean run.
+    """
+
+    def __init__(self, answers: dict) -> None:
+        self.answers = answers
+        self.calls = 0
+
+    def ask(self, state, questions):
+        from system_one import Decision, SystemOneError
+
+        self.calls += 1
+        if self.calls > 1:
+            raise SystemOneError("offline after the first run")
+        answers = {qid: dict(body) for qid, body in self.answers.items()}
+        return Decision(
+            model="fake-model", answers=answers, provider="fake", source="free",
+        )
+
+
 class CliCase(TempDir):
     """Runs the CLI with detection and the model replaced."""
 
@@ -120,6 +144,33 @@ class RateTests(CliCase):
         self.assertEqual(len(payload["totals"]), 3)
         self.assertEqual(payload["spread"], 0)
         self.assertTrue(payload["stable"])
+
+    def test_repeat_with_a_dead_endpoint_exits_no_model(self) -> None:
+        """Every run degraded to rules, so the exit code must say so.
+
+        The single-run path exits 3 for a rules-only rating; a repeated
+        run that never reached a model is the same outcome, not a 0.
+        """
+        code, out, _err = self.run_cli("rate", "--repeat", "2", error=SystemOneError("offline"))
+        self.assertEqual(code, cli.EXIT_NO_MODEL)
+        self.assertIn("No model was available", out)
+
+    def test_a_repeated_run_that_degrades_partway_exits_no_model(self) -> None:
+        """Run 1 reached a model; runs 2..N fell back to rules.
+
+        Only the first run's method was inspected before, so a run
+        that degraded halfway through exited 0 like a clean answer.
+        """
+        client = FlakyClient(rating_answers())
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
+            with mock.patch.object(cli, "SystemOneClient", return_value=client):
+                with redirect_stdout(out), redirect_stderr(err):
+                    code = cli.main(
+                        ["--history-file", str(self.history_path()), "rate", "--repeat", "3"]
+                    )
+        self.assertEqual(code, cli.EXIT_NO_MODEL)
+        self.assertIn("run 3/3", out.getvalue())
 
 
 class AskTests(CliCase):
@@ -681,6 +732,28 @@ class CheckTests(CliCase):
         code, _out, err = self.run_cli("check", "Office")
         self.assertEqual(code, cli.EXIT_USAGE)
         self.assertIn("no requirements given", err)
+
+    def test_a_full_outage_exits_three_not_four(self) -> None:
+        """No endpoint answered: every named part stays unknown,
+        which composes to the "Cannot tell" verdict -- but the
+        exit code must report the missing endpoint (3), not an
+        ungrounded question (4)."""
+        code, out, _err = self.run_cli(
+            "check", "Game", "--min-reqs", "GTX 970",
+            error=SystemOneError("offline"),
+        )
+        self.assertEqual(code, cli.EXIT_NO_MODEL)
+        self.assertIn("Cannot tell", out)
+
+    def test_a_grounded_coin_flip_still_exits_four(self) -> None:
+        """The model answered and still could not decide: that
+        verdict is ungrounded (4), because the endpoint was
+        there and usable."""
+        answers = {"req_0": noul(0.5)}
+        code, _out, _err = self.run_cli(
+            "check", "Game", "--min-reqs", "GTX 970", answers=answers,
+        )
+        self.assertEqual(code, cli.EXIT_UNGROUNDED)
 
 
 class ProgressLineTests(CliCase):

@@ -8,7 +8,7 @@ Detects CPU, RAM, GPU, VRAM, disks, and OS, then uses a System One decision mode
 
 <br>
 
-![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![psutil](https://img.shields.io/badge/psutil-Hardware-2C3E50?style=for-the-badge)
 ![Local](https://img.shields.io/badge/Runs-Locally-1ABC9C?style=for-the-badge)
 ![Tests](https://img.shields.io/badge/Tests-unittest-4A90A4?style=for-the-badge)
@@ -156,7 +156,7 @@ The interactive requirements offer only fires for a one-shot `ask` in a terminal
 
 | Exit | Meaning |
 |---|---|
-| 0 | Answered, or a rules-only rating when rating degraded |
+| 0 | Answered, or a rules-only rating when the model is unavailable |
 | 1 | The app itself failed |
 | 2 | Wrong usage, or an unreadable config file |
 | 3 | No System One endpoint answered |

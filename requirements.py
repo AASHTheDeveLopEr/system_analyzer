@@ -271,7 +271,13 @@ def check_requirements(
     if model_indexes and client is not None:
         if progress is not None:
             progress()
-        _judge_named(items, model_indexes, state, client, config, notes)
+        every_batch_failed = _judge_named(items, model_indexes, state, client, config, notes)
+        if every_batch_failed:
+            # The client exists but no endpoint answered, which is the
+            # same outage as no client at all: the named parts are
+            # unknown and the user must be told why.
+            model_unavailable = True
+            notes.append("no System One endpoint answered, so the named parts could not be judged")
     elif model_indexes:
         model_unavailable = True
         notes.append("no System One endpoint answered, so the named parts could not be judged")
@@ -300,9 +306,16 @@ def _check_numeric(requirement: Requirement, tier: str,
 
 
 def _judge_named(items: list[CheckItem], indexes: list[int], state: Mapping[str, Any],
-                 client: SystemOneClient, config: Any, notes: list[str]) -> None:
-    """Ask the provider one atomic noul per named part, in small batches."""
+                 client: SystemOneClient, config: Any, notes: list[str]) -> bool:
+    """Ask the provider one atomic noul per named part, in small batches.
+
+    Returns True when *every* batch failed, meaning no System One
+    endpoint answered at all. Partial success (some batches answered)
+    returns False: the items those batches covered carry real answers,
+    so the model was available even though other items stayed unknown.
+    """
     margin = getattr(config, "uncertain_margin", 0.10)
+    all_failed = True
     for start in range(0, len(indexes), QUESTIONS_PER_CALL):
         batch = indexes[start:start + QUESTIONS_PER_CALL]
         questions = {
@@ -319,6 +332,7 @@ def _judge_named(items: list[CheckItem], indexes: list[int], state: Mapping[str,
             for index in batch:
                 items[index] = _unknown_item(items[index], "no model answer")
             continue
+        all_failed = False
         for index in batch:
             probability = decision.noul(f"req_{index}")
             if abs(probability - 0.5) < margin:
@@ -337,6 +351,7 @@ def _judge_named(items: list[CheckItem], indexes: list[int], state: Mapping[str,
                     probability=probability,
                     detail=f"the model judged this with P={probability:.2f}",
                 )
+    return all_failed
 
 
 def _named_question(item: CheckItem) -> str:

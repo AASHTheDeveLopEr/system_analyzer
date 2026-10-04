@@ -338,8 +338,13 @@ def detect_gpus() -> tuple[Gpu, ...]:
         if _is_software_adapter(name):
             continue
         normalized = _normalize(name)
-        if any(normalized in seen or seen in normalized for seen in known):
-            continue  # pynvml already reported this one, spelled differently
+        # Substring matching is unsafe here: distinct Intel generations
+        # share a name prefix ("Intel UHD Graphics" and "Intel UHD
+        # Graphics 630" are different cards), so a substring test would
+        # silently drop a real adapter. Only an exact normalized-name
+        # match means pynvml already reported this card, spelled differently.
+        if normalized in known:
+            continue
         cards.append(Gpu(name=name, vram_bytes=vram_bytes, source=source, note=note))
         known.append(normalized)
     return tuple(cards)
@@ -394,8 +399,19 @@ def _detect_platform_gpus() -> list:
 
 
 def _normalize(name: str) -> str:
-    """Fold the vendor prefix and spacing so the same card matches itself."""
-    lowered = name.lower().replace("nvidia", "").replace("(r)", "").replace("(tm)", "")
+    """Fold vendor prefixes, branding words and spacing so the same
+    card matches itself across sources.
+
+    Sources disagree about the vendor prefix: WMI reports "Intel UHD
+    Graphics 770" where gpu-detector reports "UHD Graphics 770".
+    Stripping the brand markers makes those one card, and case is
+    folded the same way, so "NVIDIA" and "nvidia" match too. Only
+    an exact normalized match counts: distinct generations ("UHD
+    Graphics" and "UHD Graphics 630") stay apart.
+    """
+    lowered = name.lower()
+    for marker in ("nvidia", "intel", "amd", "radeon", "geforce", "(r)", "(tm)", "graphics"):
+        lowered = lowered.replace(marker, "")
     return " ".join("".join(ch if ch.isalnum() or ch.isspace() else " " for ch in lowered).split())
 
 
