@@ -353,7 +353,8 @@ def _check_named_tier(
         detail=(
             f"{required_name} ~ {required_score:g}/100 vs this machine's "
             f"{machine_name} ~ {machine_score:g}/100 "
-            f"(curated tier table v{rankings.RANKINGS_VERSION})"
+            f"(curated tier table v"
+            f"{getattr(config, 'rankings_version', rankings.RANKINGS_VERSION)})"
         ),
     )
 
@@ -437,6 +438,25 @@ def _unknown_item(item: CheckItem, reason: str) -> CheckItem:
     )
 
 
+def _item_confidence(item: CheckItem) -> float | None:
+    """How confident one outcome is, as 0-100, or ``None``.
+
+    A passed or failed item is as confident as its
+    probability backs the verdict. An unknown item carries
+    a probability only when the model was unsure (a coin
+    flip), so it can never be more than ``min(p, 1-p)``
+    -- 50 at best.
+    """
+    if item.probability is None:
+        return None
+    probability = item.probability
+    if item.state == "passed":
+        return probability * 100.0
+    if item.state == "failed":
+        return (1.0 - probability) * 100.0
+    return min(probability, 1.0 - probability) * 100.0
+
+
 def _compose(task: str, items: list[CheckItem], notes: list[str], unchecked: list[str],
              ignored: list[str], model_unavailable: bool) -> CheckResult:
     fails_min = [i for i in items if i.tier == "minimum" and i.state == "failed"]
@@ -458,10 +478,21 @@ def _compose(task: str, items: list[CheckItem], notes: list[str], unchecked: lis
         verdict = "Cannot tell"
 
     model_confidences = [
-        (i.probability if i.state == "passed" else 1.0 - i.probability) * 100.0
-        for i in items if i.probability is not None and i.state in ("passed", "failed")
+        confidence
+        for confidence in (_item_confidence(item) for item in items)
+        if confidence is not None
     ]
-    confidence = int(round(min(model_confidences))) if model_confidences else 100
+    if model_confidences:
+        confidence = int(round(min(model_confidences)))
+    elif any(item.state == "unknown" for item in items) or model_unavailable:
+        # Nothing was judged: an all-unknown checklist (a
+        # full model outage) must not inherit the
+        # deterministic score.
+        confidence = 0
+    else:
+        # A purely deterministic checklist: every item was
+        # settled without a model, so nothing was guessed.
+        confidence = 100
 
     notes = list(notes)
     if unchecked:

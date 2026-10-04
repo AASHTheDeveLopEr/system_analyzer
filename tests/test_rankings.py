@@ -27,6 +27,15 @@ import requirements
 from tests._helpers import FakeClient, TempDir, noul
 
 
+def _ranks_at_or_above(faster, slower):
+    """True when *faster* is known and ranks at or above *slower*.
+
+    A tie is legitimate: the hierarchies agree "at or above".
+    """
+    return (faster is not None and slower is not None
+            and faster >= slower)
+
+
 class MatchingTests(unittest.TestCase):
     """The lookup: normalization, variants, laptop penalty, unknown."""
 
@@ -80,13 +89,65 @@ class MatchingTests(unittest.TestCase):
         self.assertIsNone(rankings.cpu_score("A CPU That Does Not Exist"))
         self.assertIsNone(rankings.cpu_score("Intel Core i5"))  # which one?
 
-    def test_describe_names_the_nearest_anchor(self):
+    def test_a_family_word_is_not_required(self):
+        """The family word folds away, so "i7-13700KF" matches."""
+        self.assertEqual(rankings.cpu_score("i7-13700KF"), 85.0)
+        self.assertEqual(rankings.cpu_score("ryzen 5 5600X"), 65.0)
+        self.assertEqual(rankings.cpu_score("pentium gold g7400"), 20.0)
+        self.assertEqual(rankings.cpu_score("atom x5-z8350"), 9.0)
+
+    def test_a_bare_model_number_matches_one_part(self):
+        """A model number that names exactly one part is enough."""
+        self.assertEqual(rankings.cpu_score("13700K"), 85.0)
+        self.assertEqual(rankings.cpu_score("5600X"), 65.0)
+        # "4060" names two cards (the RTX 4060 and the RTX
+        # 4060 Ti), so it stays unknown rather than picking
+        # one; "7900" names three.
+        self.assertIsNone(rankings.gpu_score("4060"))
+        self.assertIsNone(rankings.gpu_score("7900"))
+
+    def test_a_d_variant_is_the_same_card(self):
+        """A China "D" variant is the same capability, no penalty."""
+        self.assertEqual(rankings.gpu_score("RTX 4090D"), 93.0)
+        self.assertEqual(rankings.gpu_score("RTX 4090 D"), 93.0)
+
+    def test_a_glued_mobile_marker_is_a_laptop_variant(self):
+        """A glued M ("RTX 4080M") is the desktop card at x0.8."""
+        self.assertEqual(rankings.gpu_score("RTX 4080M"), 71.2)
+        self.assertEqual(rankings.gpu_score("GTX 980M"), 16.0)
+        self.assertEqual(rankings.gpu_score("Radeon RX 6800M"), 55.2)
+        # Laptop-only parts have entries of their own: the glued
+        # M stays glued, the first pass matches, no penalty.
+        self.assertEqual(rankings.gpu_score("GeForce 610M"), 6.0)
+        self.assertEqual(rankings.gpu_score("GT 740M"), 9.0)
+        self.assertEqual(rankings.gpu_score("GTX 960M"), 12.0)
+
+    def test_the_extended_cpu_entries_are_placed(self):
+        """The HX and older chips the table was extended with.
+
+        These are estimates calibrated against the nearest
+        anchors, not measured scores.
+        """
+        self.assertEqual(rankings.cpu_score("Core Ultra 9 285HX"), 93.0)
+        self.assertEqual(rankings.cpu_score("Core i9-14900HX"), 89.0)
+        self.assertEqual(rankings.cpu_score("Core i7-14700HX"), 87.0)
+        self.assertEqual(rankings.cpu_score("Core i9-13900HX"), 88.0)
+        self.assertEqual(rankings.cpu_score("Core i7-13700HX"), 84.0)
+        self.assertEqual(rankings.cpu_score("Ryzen 9 7945HX"), 87.0)
+        self.assertEqual(rankings.cpu_score("Ryzen 9 7940HX"), 86.0)
+        self.assertEqual(rankings.cpu_score("Core i7-10750H"), 68.0)
+        self.assertEqual(rankings.cpu_score("Core i5-8250U"), 45.0)
+        self.assertEqual(rankings.cpu_score("Core i5-7200U"), 40.0)
+        self.assertEqual(rankings.cpu_score("Core i5-4200U"), 23.0)
+        self.assertEqual(rankings.cpu_score("Pentium G4560"), 30.0)
+        self.assertEqual(rankings.cpu_score("AMD FX-8350"), 20.0)
+        self.assertEqual(rankings.cpu_score("Core 2 Duo E8400"), 12.0)
+
+    def test_describe_names_the_part_itself(self):
         self.assertEqual(
             rankings.describe("RTX 3060"),
             "mid-range, ~43/100 (comparable to a RTX 3060)",
         )
-        # A tie in the table is broken by table order: the
-        # 1060 is its own anchor, the 1650 Super sits below it.
         self.assertEqual(
             rankings.describe("GTX 1060"),
             "entry-level, ~25/100 (comparable to a GTX 1060)",
@@ -95,7 +156,44 @@ class MatchingTests(unittest.TestCase):
             rankings.describe("Ryzen 5 3600"),
             "mid-range, ~57/100 (comparable to a Ryzen 5 3600)",
         )
+        # Both the GTX 970 and the GTX 1050 Ti sit at
+        # 18.0: the card anchors to itself, not to the
+        # first entry at its score.
+        self.assertEqual(
+            rankings.describe("GTX 970"),
+            "entry-level, ~18/100 (comparable to a GTX 970)",
+        )
         self.assertIsNone(rankings.describe("GTX Mystery 9000"))
+
+    def test_describe_uses_the_nearest_anchor_for_prose(self):
+        # "GTX 970 or better" is not itself a table
+        # entry, so the label anchors to the nearest
+        # entry at its score.
+        self.assertEqual(
+            rankings.describe("GTX 970 or better"),
+            "entry-level, ~18/100 (comparable to a GTX 1050 Ti)",
+        )
+
+    def test_a_mobile_variant_names_its_desktop_twin(self):
+        self.assertEqual(
+            rankings.describe("GeForce GTX 1080 Max-Q"),
+            "entry-level, ~28/100 (a GTX 1080 at laptop clocks)",
+        )
+        self.assertEqual(
+            rankings.describe("RTX 4080M"),
+            "high-end, ~71.2/100 (a RTX 4080 at laptop clocks)",
+        )
+
+    def test_describe_honors_a_table_override(self):
+        config = config_module.Config(
+            {"gpu_rankings": [["My GPU", 50.0]]}
+        )
+        self.assertEqual(
+            rankings.describe("My GPU", config),
+            "mid-range, ~50/100 (comparable to a My GPU)",
+        )
+        # Without the config the built-in table does not know it.
+        self.assertIsNone(rankings.describe("My GPU"))
 
     def test_tier_text_and_words(self):
         self.assertEqual(rankings.tier_text(43.0), "mid-range 43/100")
@@ -128,10 +226,14 @@ class AnchorTests(unittest.TestCase):
         self.assertTrue(48.0 <= score <= 52.0, score)
 
     def test_the_ordering_follows_the_published_hierarchies(self):
-        """Where a source measured both parts, the table must agree."""
+        """Where a source measured both parts, the table must agree.
+
+        Every pair is checked and every inversion reported, so
+        one bad entry cannot hide the ones after it.
+        """
         gpu = rankings.gpu_score
         # Tom's 2026 GPU hierarchy, measured percentages of an RTX 4090.
-        for faster, slower in (
+        hierarchy = (
             ("RTX 5090", "RTX 4090"),
             ("RTX 4090", "RX 7900 XTX"),
             ("RX 7900 XTX", "RTX 4080 Super"),
@@ -169,10 +271,14 @@ class AnchorTests(unittest.TestCase):
             ("RTX 2060", "RX Vega 64"),
             ("RX Vega 64", "GTX 1080 Ti"),
             ("GTX 1080 Ti", "RX 6600"),
-        ):
-            self.assertGreaterEqual(
-                gpu(faster), gpu(slower), f"{faster} should rank at or above {slower}"
-            )
+        )
+        inversions = [
+            f"{faster} ({gpu(faster)}) should rank at or "
+            f"above {slower} ({gpu(slower)})"
+            for faster, slower in hierarchy
+            if not _ranks_at_or_above(gpu(faster), gpu(slower))
+        ]
+        self.assertEqual(inversions, [])
         # The classic cross-generation lines, still true after the
         # recalibration: a 2060 beats a 1080 Ti, a 1060 beats a 970.
         self.assertGreater(gpu("RTX 2060"), gpu("GTX 1080 Ti"))
@@ -180,8 +286,9 @@ class AnchorTests(unittest.TestCase):
         self.assertGreaterEqual(gpu("GTX 1050 Ti"), gpu("GTX 970"))
 
     def test_the_cpu_ordering_follows_the_hierarchies(self):
+        """Every pair is checked; all inversions are reported."""
         cpu = rankings.cpu_score
-        for faster, slower in (
+        hierarchy = (
             ("Ryzen 9 9950X3D", "Ryzen 7 9800X3D"),
             ("Ryzen 7 9800X3D", "Ryzen 9 9950X"),
             ("Ryzen 9 9950X", "Core Ultra 9 285K"),
@@ -209,10 +316,14 @@ class AnchorTests(unittest.TestCase):
             ("Core i5-2450M", "Pentium Gold G7400"),
             ("Pentium Gold G7400", "Celeron G5905"),
             ("Celeron G5905", "Atom x5-Z8350"),
-        ):
-            self.assertGreaterEqual(
-                cpu(faster), cpu(slower), f"{faster} should rank at or above {slower}"
-            )
+        )
+        inversions = [
+            f"{faster} ({cpu(faster)}) should rank at or "
+            f"above {slower} ({cpu(slower)})"
+            for faster, slower in hierarchy
+            if not _ranks_at_or_above(cpu(faster), cpu(slower))
+        ]
+        self.assertEqual(inversions, [])
 
     def test_every_score_sits_on_the_scale(self):
         for _pattern, score in rankings.GPU_RANKINGS + rankings.CPU_RANKINGS:
@@ -320,6 +431,31 @@ class RequirementCheckTests(TempDir):
         self.assertEqual(client.calls, [])
         self.assertTrue(all(i.state == "passed" for i in result.items))
         self.assertEqual(result.confidence, 100)
+
+    def test_an_outage_reports_zero_confidence(self):
+        """A model that never answered judged nothing: 0, not 100."""
+        result = requirements.check_requirements(
+            self.MACHINE, "task", "GTX Mystery 9000", None, None
+        )
+        self.assertTrue(result.model_unavailable)
+        self.assertEqual(result.items[0].state, "unknown")
+        self.assertEqual(result.confidence, 0)
+
+    def test_a_coin_flip_is_at_most_fifty_confidence(self):
+        """A coin flip is 50% at best, whatever its state."""
+        client = FakeClient(answers={"req_0": noul(0.5)})
+        result = requirements.check_requirements(
+            self.MACHINE, "task", "GTX Mystery 9000", None, client
+        )
+        self.assertEqual(result.items[0].state, "unknown")
+        self.assertEqual(result.confidence, 50)
+
+    def test_the_detail_names_the_configured_version(self):
+        config = config_module.Config({"rankings_version": "2026-11"})
+        result = requirements.check_requirements(
+            self.MACHINE, "task", "GTX 970", None, None, config
+        )
+        self.assertIn("curated tier table v2026-11", result.items[0].detail)
 
     def test_unresolved_parts_share_one_model_call(self):
         """The fallback still batches: one call, one question per part."""

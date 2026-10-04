@@ -73,9 +73,13 @@ MOBILE_PENALTY = 0.8
 # "NVIDIA GeForce RTX 3060", "GeForce RTX 3060" and "RTX 3060" are
 # the same card, and "Intel(R) UHD Graphics 620" is the same adapter
 # as "UHD Graphics 620"; the vendor/brand markers are folded away so
-# the normalization below cannot tell them apart.
+# the normalization below cannot tell them apart. The family word
+# folds away too ("Core i7-13700KF", "i7-13700KF" and "13700KF"
+# name one chip) -- symmetrically on patterns and on names, so
+# dropping it cannot make one part match its neighbour.
 _STRIPPED_TOKENS = frozenset({
     "nvidia", "geforce", "radeon", "intel", "amd", "r", "tm",
+    "core", "ryzen", "pentium", "celeron", "atom", "ultra",
 })
 
 # Tokens that mark a laptop variant of a desktop card. "M" is included
@@ -87,17 +91,25 @@ _MOBILE_TOKENS = frozenset({"mobile", "laptop", "notebook", "maxq", "m"})
 # --------------------------------------------------------------------------
 # The tables
 # --------------------------------------------------------------------------
-# Each entry is (name pattern, capability score 0-100). Ordering within
-# the table is irrelevant; matching is normalization-based, so a pattern
-# only has to normalize to the same tokens as the name being looked up.
+# Each entry is (name pattern, capability score 0-100). Matching is
+# normalization-based, so a pattern only has to normalize to the same
+# tokens as the name being looked up. Ordering is not irrelevant: it
+# breaks ties -- _nearest_anchor anchors a score to the first entry
+# at that score, and equal-length contiguous matches keep the earlier
+# pattern.
 
-#: Desktop and mobile discrete GPUs, 2013-2026, plus the integrated
+#: Desktop discrete GPUs, 2013-2026, plus the integrated
 #: adapters common enough to anchor the low end. Scores follow
 #: Tom's Hardware's 2026 GPU hierarchy (a card's measured
-#: percentage of an RTX 4090), rescaled so the RTX 5090 is 100;
-#: generations the hierarchy does not cover (RTX 50 series, RX
-#: 9000 series, Arc Battlemage, Apple silicon) are placed from
-#: UL Benchmarks' rankings and review-class comparisons.
+#: percentage of an RTX 4090), rescaled so the RTX 5090 is
+#: 100; generations the hierarchy does not cover (RTX 50
+#: series, RX 9000 series, Arc Battlemage, Apple silicon)
+#: are placed from UL Benchmarks' rankings and review-class
+#: comparisons. Mobile coverage is partial on purpose: a
+#: laptop variant of a desktop card is the desktop entry at
+#: the documented penalty, and only the laptop-only parts
+#: with no desktop equivalent (the "GeForce 610M" class)
+#: have entries of their own.
 GPU_RANKINGS: tuple[tuple[str, float], ...] = (
     # NVIDIA GeForce RTX 50 series (2025-2026)
     ("RTX 5090", 100.0),
@@ -491,10 +503,6 @@ CPU_RANKINGS: tuple[tuple[str, float], ...] = (
     ("Ryzen 5 1400", 29.0),
     ("Ryzen 3 1300X", 26.0),
     ("Ryzen 3 1200", 24.0),
-    # Intel Core i3 (the low end of each generation)
-    ("Core i3-10100", 52.0),
-    ("Core i3-9100", 55.0),
-    ("Core i3-8100", 54.0),
     # Common Intel laptop chips (Alder Lake and newer)
     ("Core Ultra 9 185H", 82.0),
     ("Core Ultra 7 165H", 76.0),
@@ -519,7 +527,22 @@ CPU_RANKINGS: tuple[tuple[str, float], ...] = (
     ("Core i5-12500H", 70.0),
     ("Core i5-1435U", 66.0),
     ("Core i5-1445U", 68.0),
+    # Intel HX laptop chips: desktop-class silicon in a
+    # laptop body. Estimates, calibrated ~= their K
+    # counterparts, a touch lower for the mobile platform.
+    ("Core Ultra 9 285HX", 93.0),
+    ("Core i9-14900HX", 89.0),
+    ("Core i7-14700HX", 87.0),
+    ("Core i9-13900HX", 88.0),
+    ("Core i7-13700HX", 84.0),
+    # Common Intel laptop chips (Comet Lake; estimate:
+    # ~= Core i7-10700, slightly lower)
+    ("Core i7-10750H", 68.0),
     # Common AMD laptop chips (Zen 3+ and newer)
+    # AMD HX laptop chips: desktop-class Zen 4.
+    # Estimates, ~= the 7950X class.
+    ("Ryzen 9 7945HX", 87.0),
+    ("Ryzen 9 7940HX", 86.0),
     ("Ryzen 9 7940HS", 88.0),
     ("Ryzen 9 8945HS", 88.0),
     ("Ryzen 7 8845HS", 82.0),
@@ -536,10 +559,24 @@ CPU_RANKINGS: tuple[tuple[str, float], ...] = (
     ("Ryzen 5 8500G", 62.0),
     ("Ryzen 5 8300G", 58.0),
     ("Ryzen 7 8700G", 72.0),
+    # Old Intel ULV laptop chips (estimates from the
+    # nearest mobile anchors: the i5-2450M at 21, the
+    # i3-6100 class at 48)
+    ("Core i5-8250U", 45.0),
+    ("Core i5-7200U", 40.0),
+    ("Core i5-4200U", 23.0),
+    # The pre-Zen and pre-Core-i7 floor (estimates:
+    # the FX-8350 is Bulldozer, weak single-thread; the
+    # Core 2 Duo is a decade and a half old)
+    ("AMD FX-8350", 20.0),
+    ("Core 2 Duo E8400", 12.0),
     # Intel Celeron / Pentium / Atom, the floor
     ("Core i3-N305", 40.0),
     ("Pentium Gold G7400", 20.0),
     ("Pentium Gold G6400", 25.0),
+    # Kaby Lake dual-core with hyper-threading
+    # (estimate: ~30)
+    ("Pentium G4560", 30.0),
     ("Pentium Silver N6000", 21.0),
     ("Pentium Silver N5100", 19.0),
     ("Celeron G5905", 17.0),
@@ -623,25 +660,44 @@ def cpu_entry(
     return _lookup_entry(name, effective_table("cpu_rankings", CPU_RANKINGS, config))
 
 
-def describe(name: str) -> str | None:
+def describe(name: str, config: Any = None) -> str | None:
     """A short human label for a GPU or CPU name, or ``None`` if unknown.
 
-    The label names the nearest table anchor, so it can be checked
-    against the tables above instead of trusted on faith: a returned
-    ``"mid-range, ~55/100 (comparable to a RTX 3060)"`` is a claim
-    about the table, not about the world. The GPU table is searched
-    first because GPU names are the ones usually asked about.
+    The label names the part itself when the name is a table
+    entry (``"GTX 970"`` anchors to the GTX 970, not to the
+    first entry at the same score), so it can be checked
+    against the tables above instead of trusted on faith. A
+    name that only matches by containment ("GTX 970 or
+    better") is not a table entry, so it is labelled against
+    the nearest anchor at its score. A mobile variant names
+    the desktop twin it was matched to, at its discounted
+    laptop score. ``config``, when given, is anything with a
+    ``get`` method (the app's ``Config``); a ``gpu_rankings``
+    or ``cpu_rankings`` override in it replaces the built-in
+    table. The GPU table is searched first because GPU names
+    are the ones usually asked about.
     """
-    for table in (GPU_RANKINGS, CPU_RANKINGS):
-        entry = _lookup_entry(name, table)
-        if entry is not None:
-            score = entry[1]
+    for key, default in (("gpu_rankings", GPU_RANKINGS),
+                         ("cpu_rankings", CPU_RANKINGS)):
+        table = effective_table(key, default, config)
+        detail = _lookup_detail(name, table)
+        if detail is None:
+            continue
+        pattern, score, mobile = detail
+        if _exact_entry(name, table) is None:
             anchor, _anchor_score = _nearest_anchor(score, table)
-            article = "an" if anchor[:1].lower() in "aeiou" else "a"
+        else:
+            anchor = pattern
+        article = "an" if anchor[:1].lower() in "aeiou" else "a"
+        if mobile:
             return (
                 f"{tier_word(score)}, ~{score:g}/100 "
-                f"(comparable to {article} {anchor})"
+                f"({article} {anchor} at laptop clocks)"
             )
+        return (
+            f"{tier_word(score)}, ~{score:g}/100 "
+            f"(comparable to {article} {anchor})"
+        )
     return None
 
 
@@ -672,36 +728,131 @@ def tier_text(score: float | None) -> str:
 def _lookup_entry(
     name: str, table: tuple[tuple[str, float], ...]
 ) -> tuple[str, float] | None:
-    """Find *name* in *table*, or ``None`` when nothing matches.
+    """Find *name* in *table*, or ``None`` when nothing matches."""
+    detail = _lookup_detail(name, table)
+    return None if detail is None else (detail[0], detail[1])
 
-    Matching is deliberately conservative: normalization (vendor
-    prefixes, suffixes, punctuation) plus at most a contiguous-token
-    containment, longest pattern first. Anything fuzzier would cross
-    the boundary between a card and its Ti/Super variant, which is
-    exactly the distinction a requirement check is asked about.
+
+def _lookup_detail(
+    name: str, table: tuple[tuple[str, float], ...]
+) -> tuple[str, float, bool] | None:
+    """The matched entry as ``(pattern, score, was_mobile)``.
+
+    Four passes, each more permissive than the last, and each
+    reached only when the previous one failed:
+
+    1. exact: the name normalizes to the pattern's tokens --
+       the only match that can never confuse "RTX 3060"
+       with "RTX 3060 Ti";
+    2. contiguous: the longest pattern whose tokens appear as
+       one unbroken run in the name, which absorbs generation
+       prefixes ("11th Gen Intel Core i5-1135G7") and
+       requirement prose ("GTX 970 or better") without
+       crossing a suffix boundary, because a longer pattern
+       (the Ti variant of the same card) always wins;
+    3. glued mobile: a token like "4080m" is a model number
+       with the mobile marker glued to it, so it is split
+       into base + "m" and retried as mobile -- "RTX 4080M"
+       is an RTX 4080 at laptop clocks. Only reached when
+       the normal passes failed, so laptop-only parts with
+       entries of their own ("GeForce 610M", "GT 740M")
+       keep their exact, unpenalized first-pass match;
+    4. bare model number: a token such as "13700K" that
+       names exactly one pattern is that pattern. A token
+       several patterns share ("4060" is both the RTX 4060
+       and the RTX 4060 Ti) is ambiguous, and ambiguity
+       stays unknown rather than picking a favourite.
+    """
+    prepared = _prepared_tokens(name)
+    if prepared is None:
+        return None
+    mobile, tokens = prepared
+    entry = _match_tokens(tokens, table)
+    if entry is not None:
+        return entry[0], _laptop_adjusted(entry[1], mobile), mobile
+
+    split = _split_glued_mobile(tokens)
+    if split is not None:
+        base = [token for token in split if token != "m"]
+        if base:
+            entry = _match_tokens(base, table)
+            if entry is not None:
+                return entry[0], _laptop_adjusted(entry[1], True), True
+
+    return _model_token_entry(tokens, table)
+
+
+def _exact_entry(
+    name: str, table: tuple[tuple[str, float], ...]
+) -> tuple[str, float] | None:
+    """The entry when *name* is itself a table pattern.
+
+    An exact normalization match, or the glued-mobile
+    split -- but not the contiguous fallback, which is for
+    prose around a part ("GTX 970 or better"), and not
+    the bare-model-number fallback, which is for names
+    too short to carry the family word.
+    """
+    prepared = _prepared_tokens(name)
+    if prepared is None:
+        return None
+    mobile, tokens = prepared
+    entry = _exact_tokens(tokens, table)
+    if entry is not None:
+        return entry[0], _laptop_adjusted(entry[1], mobile)
+    split = _split_glued_mobile(tokens)
+    if split is None:
+        return None
+    base = [token for token in split if token != "m"]
+    if not base:
+        return None
+    entry = _exact_tokens(base, table)
+    if entry is None:
+        return None
+    return entry[0], _laptop_adjusted(entry[1], True)
+
+
+def _prepared_tokens(name: str) -> tuple[bool, list[str]] | None:
+    """``(is_mobile, tokens)`` for a lookup, or ``None`` if unusable.
+
+    A separate mobile marker ("Laptop", "Max-Q", a bare
+    "M") is dropped from the tokens and remembered, so the
+    lookup compares the part against its desktop twin and
+    the caller can apply the penalty.
     """
     tokens = _tokens(name)
     if not tokens:
         return None
-
     mobile = any(token in _MOBILE_TOKENS for token in tokens)
     if mobile:
         tokens = [token for token in tokens if token not in _MOBILE_TOKENS]
         if not tokens:
             return None
+    return mobile, tokens
 
-    # Exact match first. This is the common case, and it is the only
-    # match that can never confuse "RTX 3060" with "RTX 3060 Ti".
+
+def _exact_tokens(
+    tokens: list[str], table: tuple[tuple[str, float], ...]
+) -> tuple[str, float] | None:
+    """The entry whose tokens are exactly *tokens*."""
     for pattern, score in table:
         if _tokens(pattern) == tokens:
-            return pattern, _laptop_adjusted(score, mobile)
+            return pattern, score
+    return None
 
-    # Fallback: the longest pattern whose tokens appear contiguously in
-    # the name. This is what absorbs generation prefixes ("11th Gen
-    # Intel Core i5-1135G7") and requirement prose ("GTX 970 or
-    # better") without crossing a suffix boundary, because a longer
-    # pattern (the Ti variant of the same card) always wins over a
-    # shorter one.
+
+def _match_tokens(
+    tokens: list[str], table: tuple[tuple[str, float], ...]
+) -> tuple[str, float] | None:
+    """The best entry for already-normalized *tokens*.
+
+    Exact first, then the longest pattern whose tokens appear
+    contiguously in *tokens*; equal-length contenders keep
+    the earlier pattern, so table order breaks the tie.
+    """
+    entry = _exact_tokens(tokens, table)
+    if entry is not None:
+        return entry
     best_length = 0
     best: tuple[str, float] | None = None
     for pattern, score in table:
@@ -711,18 +862,73 @@ def _lookup_entry(
         if _contains_contiguous(tokens, pattern_tokens):
             best_length = len(pattern_tokens)
             best = (pattern, score)
+    return best
 
-    if best is None:
+
+def _split_glued_mobile(tokens: list[str]) -> list[str] | None:
+    """Split glued mobile markers ("4080m" -> "4080" + "m").
+
+    A token that ends in "m" with a digit before it is a
+    model number plus the mobile marker. Returns ``None``
+    when no token carries a glued marker, so the caller
+    knows this pass does not apply.
+    """
+    split: list[str] = []
+    glued = False
+    for token in tokens:
+        if (len(token) > 1 and token.endswith("m")
+                and token[-2].isdigit()):
+            split.extend((token[:-1], "m"))
+            glued = True
+        else:
+            split.append(token)
+    return split if glued else None
+
+
+def _model_token_entry(
+    tokens: list[str], table: tuple[tuple[str, float], ...]
+) -> tuple[str, float] | None:
+    """The entry a bare model number ("13700K") names, if it is one.
+
+    Patterns are indexed by their model tokens (the tokens
+    carrying 3+ digits). A name token that maps to exactly
+    one pattern is that pattern; one that several patterns
+    share is ambiguous, and ambiguity stays unknown.
+    """
+    by_token: dict[str, set[tuple[str, ...]]] = {}
+    for pattern, _score in table:
+        pattern_tokens = _tokens(pattern)
+        for token in pattern_tokens:
+            if _is_model_token(token):
+                by_token.setdefault(token, set()).add(
+                    tuple(pattern_tokens)
+                )
+    matched: set[tuple[str, ...]] = set()
+    for token in tokens:
+        if _is_model_token(token):
+            matched.update(by_token.get(token, ()))
+    if len(matched) != 1:
         return None
-    return best[0], _laptop_adjusted(best[1], mobile)
+    pattern_tokens = matched.pop()
+    for pattern, score in table:
+        if tuple(_tokens(pattern)) == pattern_tokens:
+            return pattern, score
+    return None  # unreachable: the set came from this table
+
+
+def _is_model_token(token: str) -> bool:
+    """True for a token carrying a model number (3+ digits)."""
+    return sum(1 for char in token if char.isdigit()) >= 3
 
 
 def _tokens(name: str) -> list[str]:
     """The comparison form of a hardware name.
 
     Lowercase, vendor/brand markers removed, punctuation folded to
-    spaces, "Max-Q" folded to "maxq", and the redundant "gpu" token
-    dropped (everything in the GPU table is a GPU).
+    spaces, "Max-Q" folded to "maxq", the redundant "gpu" token
+    dropped (everything in the GPU table is a GPU), and a
+    trailing "F"/"D" on a model number folded away (the same
+    chip).
     """
     lowered = (name or "").lower()
     for marker in ("(r)", "(tm)"):
@@ -739,12 +945,14 @@ def _tokens(name: str) -> list[str]:
             continue
         if result and result[-1] == "max" and token == "q":
             result[-1] = "maxq"
-        elif (token.endswith("f") and len(token) > 1
+        elif (token.endswith(("f", "d")) and len(token) > 1
               and token[0].isdigit()):
             # An "F" SKU is the same chip without integrated
             # graphics ("Core i5-12400F" vs "Core i5-12400",
-            # "Core i7-13700KF" vs "Core i7-13700K"): the same
-            # capability, so the F folds away.
+            # "Core i7-13700KF" vs "Core i7-13700K"), and a
+            # "D" variant is the same silicon in another market
+            # ("RTX 4090D" vs "RTX 4090"): the same
+            # capability, so the suffix folds away.
             result.append(token[:-1])
         else:
             result.append(token)

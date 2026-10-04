@@ -149,6 +149,16 @@ In `--json` mode, an unsure ask can return `"requirements_needed": true` instead
 
 ---
 
+# Rankings overrides
+
+The curated GPU/CPU capability tables (`rankings.py`) can be replaced through the config file pointed at by `--config` (or the `SYSTEM_ANALYZER_CONFIG` environment variable) — not `settings.py`'s `config.json`, which rejects unknown keys. Three keys are accepted: `gpu_rankings` and `cpu_rankings` (each the whole table, as a list of `[pattern, score]` pairs) and `rankings_version` (the version string the ordering is dated with). An override REPLACES the whole table: any part absent from it loses its `capability_score`, stays `unknown`, and its requirement checks fall back to the model. Scores must sit between 0 and 100; a malformed override is rejected loudly at startup.
+
+```json
+{"gpu_rankings": [["My GPU", 50.0]], "rankings_version": "2026-11"}
+```
+
+---
+
 # Exit codes
 
 | Exit | Meaning |
