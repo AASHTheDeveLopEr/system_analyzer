@@ -290,7 +290,10 @@ def _rate_repeated(
         reporter.say(f"  tiers seen : {', '.join(sorted(b for b in bands if b)) or 'unknown'}")
         reporter.say(f"  stable     : {'yes' if stable else 'no'} (tolerance {tolerance})")
         reporter.say("")
-    return EXIT_OK
+    # A degraded rating is not "answered": the single-run path exits 3
+    # when the method fell back to rules, and a repeated run that never
+    # reached a model must say the same instead of exiting 0.
+    return EXIT_NO_MODEL if results[0].method == "rules" else EXIT_OK
 
 
 def _print_verdict(verdict: Any, reporter: Reporter) -> None:

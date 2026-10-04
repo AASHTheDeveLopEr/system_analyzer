@@ -117,6 +117,16 @@ class RateTests(CliCase):
         self.assertEqual(payload["spread"], 0)
         self.assertTrue(payload["stable"])
 
+    def test_repeat_with_a_dead_endpoint_exits_no_model(self) -> None:
+        """Every run degraded to rules, so the exit code must say so.
+
+        The single-run path exits 3 for a rules-only rating; a repeated
+        run that never reached a model is the same outcome, not a 0.
+        """
+        code, out, _err = self.run_cli("rate", "--repeat", "2", error=SystemOneError("offline"))
+        self.assertEqual(code, cli.EXIT_NO_MODEL)
+        self.assertIn("No model was available", out)
+
 
 class AskTests(CliCase):
     def test_ask_prints_a_verdict_and_a_confidence(self) -> None:
