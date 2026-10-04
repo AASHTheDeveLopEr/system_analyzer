@@ -154,7 +154,7 @@ In `--json` mode, an unsure ask can return `"requirements_needed": true` instead
 
 | Exit | Meaning |
 |---|---|
-| 0 | Answered |
+| 0 | Answered, or a rules-only rating when the model is unavailable |
 | 1 | The app itself failed |
 | 2 | Wrong usage, or an unreadable config file |
 | 3 | No System One endpoint answered |

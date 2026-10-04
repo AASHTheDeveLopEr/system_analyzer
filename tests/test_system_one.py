@@ -270,5 +270,29 @@ class ProviderChainTests(unittest.TestCase):
         post.assert_not_called()
 
 
+class AuthorizationHeaderTests(unittest.TestCase):
+    """The local Ollama endpoint takes no auth: an empty auth
+    means the header is omitted entirely, never filled with a
+    fabricated token."""
+
+    def _posted_headers(self, auth):
+        provider = {"name": "fake", "url": "https://x.example/v1/systemone",
+                    "model": "m", "source": "free", "auth": auth}
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {"model": "m", "answers": {}}
+        with mock.patch.object(system_one.requests, "post", return_value=response) as post:
+            client = SystemOneClient([provider])
+            client.ask(STATE, {"q": question(type="noul")})
+        return post.call_args.kwargs["headers"]
+
+    def test_no_authorization_header_when_auth_is_empty(self):
+        headers = self._posted_headers("")
+        self.assertNotIn("Authorization", headers)
+
+    def test_the_token_rides_in_the_authorization_header(self):
+        headers = self._posted_headers("Bearer secret")
+        self.assertEqual(headers["Authorization"], "Bearer secret")
+
+
 if __name__ == "__main__":
     unittest.main()

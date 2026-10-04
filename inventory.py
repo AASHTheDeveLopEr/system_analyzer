@@ -399,8 +399,19 @@ def _detect_platform_gpus() -> list:
 
 
 def _normalize(name: str) -> str:
-    """Fold the vendor prefix and spacing so the same card matches itself."""
-    lowered = name.lower().replace("nvidia", "").replace("(r)", "").replace("(tm)", "")
+    """Fold vendor prefixes, branding words and spacing so the same
+    card matches itself across sources.
+
+    Sources disagree about the vendor prefix: WMI reports "Intel UHD
+    Graphics 770" where gpu-detector reports "UHD Graphics 770".
+    Stripping the brand markers makes those one card, and case is
+    folded the same way, so "NVIDIA" and "nvidia" match too. Only
+    an exact normalized match counts: distinct generations ("UHD
+    Graphics" and "UHD Graphics 630") stay apart.
+    """
+    lowered = name.lower()
+    for marker in ("nvidia", "intel", "amd", "radeon", "geforce", "(r)", "(tm)", "graphics"):
+        lowered = lowered.replace(marker, "")
     return " ".join("".join(ch if ch.isalnum() or ch.isspace() else " " for ch in lowered).split())
 
 
