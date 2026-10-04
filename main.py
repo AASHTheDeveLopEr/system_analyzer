@@ -21,7 +21,7 @@ codes that mean something::
 
     0  worked
     1  something went wrong
-    2  bad command line
+    2  bad command line, or a config.json that cannot be used
     3  no System One endpoint answered -- degraded, output is still valid
     4  the question could not be grounded in your hardware -- no verdict given
 
@@ -569,6 +569,11 @@ def _ask_in_session(
         reporter.note(f"no System One endpoint answered: {error}")
         reporter.say("  No verdict this time -- the endpoint did not answer.")
     except ValueError as error:
+        # A bad answer from the model layer (an empty question, for
+        # one) is soft: the session continues. SettingsError is
+        # deliberately not a ValueError (see settings.py), so a
+        # broken config.json escapes this catch and reaches
+        # main()'s exit-2 wrapper instead of being printed here.
         reporter.say(f"  {error}")
 
 
@@ -1166,6 +1171,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"config error: {error}", file=sys.stderr)
         return EXIT_USAGE
 
+    # Settings are validated here, at launch: a config.json that
+    # cannot be used fails fast with exit 2, before any command
+    # runs -- even one like specs that never touches a provider.
+    # The provider chain itself stays lazy; it is built when a
+    # command first asks for it, so a run that never consults a
+    # model never probes an endpoint.
+    try:
+        settings_module.load_settings()
+    except settings_module.SettingsError as error:
+        print(f"settings error: {error}", file=sys.stderr)
+        return EXIT_USAGE
+
     if args.history_file is None:
         args.history_file = Path(os.environ.get(history_module.HISTORY_ENV)
                                  or history_module.DEFAULT_HISTORY)
@@ -1196,11 +1213,22 @@ def main(argv: list[str] | None = None) -> int:
         "setup": cmd_setup,
     }
 
-    if args.command is None:
-        # No command: a terminal gets the interactive app, a pipe gets a
-        # question loop -- one answer per line.
-        return cmd_interactive(args, reporter)
-    return handlers[args.command](args, reporter)
+    try:
+        if args.command is None:
+            # No command: a terminal gets the interactive app, a pipe gets a
+            # question loop -- one answer per line.
+            return cmd_interactive(args, reporter)
+        return handlers[args.command](args, reporter)
+    except settings_module.SettingsError as error:
+        # Backstop: settings are validated at launch (above), but
+        # commands still load and save settings themselves -- the
+        # settings menu, onboarding, setup. A failure there is
+        # reported the same way: the one line that says which
+        # file to fix, and exit 2. In the interactive session
+        # this also means the session ends; a broken config.json
+        # is not something to keep running on.
+        print(f"settings error: {error}", file=sys.stderr)
+        return EXIT_USAGE
 
 
 if __name__ == "__main__":
