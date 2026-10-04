@@ -17,6 +17,7 @@ from unittest import mock
 
 import main as cli
 import inventory
+import judgment
 import settings
 import system_one
 from system_one import SystemOneError
@@ -251,13 +252,15 @@ class SettingsErrorTests(TempDir):
     """A config.json that cannot be used is exit 2, not a traceback.
 
     ``main()`` already keeps that promise for the ``--config`` thresholds
-    file; these tests hold it for the settings file, which loads lazily:
-    the provider chain is built inside whichever command needs it, so the
-    exit-code contract has to be enforced around the dispatch.
+    file; these tests hold it for the settings file. Settings are
+    validated eagerly, at launch, so the exit-2 contract holds for every
+    command -- even one that never touches a provider. The dispatch
+    wrapper remains as a backstop for the settings loads commands still
+    do themselves (the settings menu, onboarding, setup).
 
-    ``SystemOneClient`` is deliberately left real here -- its constructor
-    is where the chain is built, and a broken config.json raises there,
-    before any endpoint is contacted, so these runs stay offline.
+    ``SystemOneClient`` is deliberately left real here: a broken
+    config.json is caught before any command runs, so no endpoint is
+    ever contacted and these runs stay offline.
     """
 
     def setUp(self) -> None:
@@ -313,14 +316,29 @@ class SettingsErrorTests(TempDir):
             {"value": ["zen"], "origin": "config.json"},
         )
 
+    def test_a_broken_config_fails_at_launch_even_without_a_provider(self) -> None:
+        # specs never builds the provider chain, so a lazy
+        # settings load would never run it. Settings are
+        # validated at launch: the broken file fails fast
+        # with exit 2 before any command starts.
+        self.write("config.json", json.dumps({"openrouter_model": "some-model"}))
+        code, out, err = self.run_cli("specs")
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertEqual(out, "")
+        self.assertIn("settings error", err)
+        self.assertIn("openrouter_model", err)
+        self.assertIn("config.json", err)
+        self.assertNotIn("Traceback", err)
+
     def test_every_settings_touching_command_exits_two(self) -> None:
-        # The wrapper sits around the dispatch, so the contract holds for
-        # every command, wherever its settings load happens: the client
-        # constructor (rate, ask, check), the provider document (config),
-        # the chain itself (payload), the session loop (session), and
-        # onboarding (setup, whose only gate is the interactive check).
+        # Settings are validated at launch, so the contract holds
+        # for every command alike; the commands listed still load
+        # settings again inside themselves (the client constructor,
+        # the provider document, the settings menu, the session
+        # loop, onboarding), and the launch check runs first.
         self.write("config.json", json.dumps({"provider_chain": "openrouter"}))
         cases: list[tuple[list[str], str]] = [
+            (["specs"], ""),
             (["rate"], ""),
             (["ask", "can I game?"], ""),
             (["check", "Office", "--min-reqs", "4 GB RAM"], ""),
@@ -342,6 +360,66 @@ class SettingsErrorTests(TempDir):
                 self.assertEqual(code, cli.EXIT_USAGE, err)
                 self.assertIn("settings error", err)
                 self.assertNotIn("Traceback", err)
+
+
+class AskBlockSettingsErrorTests(TempDir):
+    """A SettingsError inside the ask block is exit 2, not a soft line.
+
+    ``_ask_in_session`` catches ``ValueError`` so a bad answer cannot
+    end the session. If ``SettingsError`` were a ``ValueError``, a
+    settings failure raised inside that block would be printed as a
+    soft message and the session would carry on -- so the class
+    deliberately is not one. This test holds the exit-2 promise for
+    the worst case: an error raised mid-answer, inside a session that
+    is already running.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # The environment must not break the settings load before the
+        # ask block is reached: the error has to come from inside the
+        # block, not from launch.
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for name in (
+            settings.TYPESAFE_KEY_ENV,
+            settings.ZEN_KEY_ENV,
+            settings.PROVIDERS_ENV,
+            settings.OLLAMA_URL_ENV,
+            settings.OLLAMA_MODEL_ENV,
+            settings.CLOUD_FALLBACK_ENV,
+        ):
+            os.environ.pop(name, None)
+
+    def test_a_settings_error_raised_inside_the_ask_block_is_exit_two(self) -> None:
+        self.write("config.json", json.dumps({"provider_chain": "zen"}))
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
+            with mock.patch.object(cli, "SystemOneClient", return_value=FakeClient(capability_answers(0.95))):
+                # The model layer raises a settings error mid-answer:
+                # the worst place for it, inside the block the
+                # session treats as soft.
+                with mock.patch.object(
+                    judgment, "answer_capability",
+                    side_effect=settings.SettingsError(
+                        "config.json has unknown setting(s): openrouter_model"
+                    ),
+                ):
+                    # A piped question: one line in, and the loop
+                    # would happily continue if the error were soft.
+                    with mock.patch.object(cli.sys, "stdin", io.StringIO("can I game?\n")):
+                        with redirect_stdout(out), redirect_stderr(err):
+                            code = cli.main(
+                                ["--history-file", str(self.tmp / "history.json"), "session"]
+                            )
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertIn("settings error", err.getvalue())
+        self.assertIn("openrouter_model", err.getvalue())
+        # Not the soft line: the error must not be printed as a
+        # message the session recovers from.
+        self.assertNotIn("openrouter_model", out.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
 
 
 class SessionTests(CliCase):
