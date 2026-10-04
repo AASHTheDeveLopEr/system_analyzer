@@ -148,6 +148,8 @@ python main.py check "a game" --min-reqs "8 GB RAM; 50 GB storage"
 
 In `--json` mode, an unsure ask can return `"requirements_needed": true` instead of blocking on a prompt.
 
+The interactive requirements offer only fires for a one-shot `ask` in a terminal. It is skipped for `--json`, piped input, and `--repeat` runs, which never block on a prompt; in `--json` mode those runs get `"requirements_needed": true` in the JSON instead.
+
 ---
 
 # Exit codes

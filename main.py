@@ -373,7 +373,11 @@ def cmd_ask(
         # Offered unconditionally: the checklist is for the verdicts that
         # most need it (coin-flip or ungrounded), and _offer_requirements
         # no-ops for grounded verdicts, --json, and non-interactive runs.
-        _offer_requirements(machine, _verdict, args, reporter, client)
+        checklist = _offer_requirements(machine, _verdict, args, reporter, client)
+        if _settled_by_checklist(checklist):
+            # The pasted requirements answered the question, so the
+            # checklist's grounded verdict decides the exit code.
+            code = EXIT_OK
         return code
     except SystemOneError as error:
         reporter.note(f"no System One endpoint answered: {error}")
@@ -561,17 +565,27 @@ def _ask_in_session(
     question: str,
     machine: Any,
     client: Any,
-) -> None:
-    """One question inside the interactive loop: answer, then offer the checklist."""
+) -> int:
+    """One question inside the interactive loop: answer, then offer the checklist.
+
+    Returns the question's exit code: a grounded checklist that
+    settles the question counts as answered, everything else
+    keeps the verdict's own code.
+    """
     try:
-        _verdict, _code = _ask_once(machine, question, client, args, history, reporter)
+        _verdict, code = _ask_once(machine, question, client, args, history, reporter)
         if not args.json:
-            _offer_requirements(machine, _verdict, args, reporter, client)
+            checklist = _offer_requirements(machine, _verdict, args, reporter, client)
+            if _settled_by_checklist(checklist):
+                code = EXIT_OK
+        return code
     except SystemOneError as error:
         reporter.note(f"no System One endpoint answered: {error}")
         reporter.say("  No verdict this time -- the endpoint did not answer.")
+        return EXIT_NO_MODEL
     except ValueError as error:
         reporter.say(f"  {error}")
+        return EXIT_ERROR
 
 
 def _print_banner(reporter: Reporter) -> None:
@@ -627,7 +641,10 @@ def cmd_check(
             'no requirements given; use --min-reqs "8 GB RAM; 2 GHz CPU" or run interactively'
         )
         return EXIT_USAGE
-    return _run_checklist(machine, task, minimum_text, recommended_text, args, reporter, client)
+    code, _result = _run_checklist(
+        machine, task, minimum_text, recommended_text, args, reporter, client
+    )
+    return code
 
 
 def _run_checklist(
@@ -638,7 +655,15 @@ def _run_checklist(
     args: argparse.Namespace,
     reporter: Reporter,
     client: Any = None,
-) -> int:
+) -> tuple[int, Any]:
+    """Run the checklist, report it, and hand back what it decided.
+
+    Returns the exit code plus the ``CheckResult`` the checklist
+    produced, so a caller that offered it can treat a grounded
+    verdict as the answer. The result is ``None`` when no
+    checklist could run at all: unparsable requirements, or no
+    endpoint to judge the named parts.
+    """
     client = client or _client()
     try:
         result = requirements_module.check_requirements(
@@ -648,22 +673,22 @@ def _run_checklist(
         )
     except requirements_module.RequirementError as error:
         reporter.note(f"could not check the requirements: {error}")
-        return EXIT_USAGE
+        return EXIT_USAGE, None
     except SystemOneError as error:
         reporter.note(f"no System One endpoint answered: {error}")
         if args.json:
             reporter.data({"error": "no_endpoint_answered", "detail": str(error)})
-        return EXIT_NO_MODEL
+        return EXIT_NO_MODEL, None
 
     if args.json:
         reporter.data(result.to_dict())
     else:
         _print_checklist(result, reporter)
     if result.verdict == "Cannot tell":
-        return EXIT_UNGROUNDED
+        return EXIT_UNGROUNDED, result
     if result.model_unavailable:
-        return EXIT_NO_MODEL
-    return EXIT_OK
+        return EXIT_NO_MODEL, result
+    return EXIT_OK, result
 
 
 def _print_checklist(result: Any, reporter: Reporter) -> None:
@@ -729,16 +754,21 @@ def _paste_block(reporter: Reporter, prompt: str) -> str:
 def _offer_requirements(
     machine: Any, verdict: Any, args: argparse.Namespace,
     reporter: Reporter, client: Any,
-) -> bool:
+) -> Any:
     """After a coin-flip or ungrounded verdict, offer the requirements checklist.
 
     Interactive only. A script that cannot answer questions is never stopped
     by one: it gets ``requirements_needed`` in its JSON instead.
+
+    Returns the ``CheckResult`` the checklist produced, so the caller
+    can let a grounded checklist settle the exit code, or ``None``
+    whenever no checklist ran: a grounded verdict, ``--json``, a
+    non-interactive run, or an empty paste.
     """
     if not (verdict.uncertain or not verdict.grounded):
-        return False
+        return None
     if args.json or not _interactive_terminal():
-        return False
+        return None
     reporter.say("")
     reporter.say("  The model could not judge that with confidence.")
     minimum = _paste_block(
@@ -746,10 +776,22 @@ def _offer_requirements(
     )
     if not minimum:
         reporter.say("")
-        return False
+        return None
     recommended = _paste_block(reporter, "  Recommended specs, one per line (optional)")
-    _run_checklist(machine, verdict.question, minimum, recommended, args, reporter, client)
-    return True
+    _code, checklist = _run_checklist(
+        machine, verdict.question, minimum, recommended, args, reporter, client
+    )
+    return checklist
+
+
+def _settled_by_checklist(checklist: Any) -> bool:
+    """True when a checklist ran and grounded its verdict.
+
+    A checklist that ran but landed on "Cannot tell" settled
+    nothing: the question stays ungrounded and the ask's own
+    exit code stands.
+    """
+    return checklist is not None and checklist.verdict != "Cannot tell"
 
 
 # --------------------------------------------------------------------------

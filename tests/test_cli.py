@@ -22,6 +22,7 @@ from tests._helpers import (
     FakeClient,
     TempDir,
     capability_answers,
+    noul,
     sample_inventory,
     score,
 )
@@ -193,6 +194,49 @@ class AskTests(CliCase):
         payload = json.loads(out)
         self.assertTrue(payload["requirements_needed"])
         self.assertIn("hint", payload)
+
+    def test_a_grounded_checklist_settles_an_ungrounded_ask(self) -> None:
+        # Pasting requirements this machine meets answers the
+        # question the specs could not: the checklist's grounded
+        # verdict decides the exit code, not the ungrounded ask.
+        answers = capability_answers(0.9, grounding="specs_do_not_decide_it")
+        replies = ["8 GB RAM; 3.6 GHz CPU", "", ""]
+        code, out, _err, client = self._run_ask_tty(
+            "ask", "Can I stream on Twitch?", answers=answers, replies=replies
+        )
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("Cannot tell", out)
+        self.assertIn("Meets the minimum", out)
+        # Every requirement is numeric, so the ask is the only
+        # model call the run makes.
+        self.assertEqual(len(client.calls), 1)
+
+    def test_an_ungrounded_ask_with_no_checklist_still_exits_four(self) -> None:
+        # A non-interactive run never sees the offer, so nothing
+        # can settle the question and the ungrounded code stands.
+        answers = capability_answers(0.9, grounding="specs_do_not_decide_it")
+        code, out, _err = self.run_cli(
+            "ask", "Can I stream on Twitch?", answers=answers
+        )
+        self.assertEqual(code, cli.EXIT_UNGROUNDED)
+        self.assertIn("Cannot tell", out)
+        self.assertNotIn("MINIMUM requirements", out)
+
+    def test_an_ungrounded_checklist_does_not_settle_the_ask(self) -> None:
+        # A checklist that runs but lands on "Cannot tell" settled
+        # nothing: the ask's ungrounded exit code stands.
+        answers = {
+            **capability_answers(0.9, grounding="specs_do_not_decide_it"),
+            "req_0": noul(0.5),
+        }
+        replies = ["GTX 970", "", ""]
+        code, out, _err, client = self._run_ask_tty(
+            "ask", "Can I game?", answers=answers, replies=replies
+        )
+        self.assertEqual(code, cli.EXIT_UNGROUNDED)
+        self.assertIn("Cannot tell", out)
+        # The named part was judged once for the ask, once for the checklist.
+        self.assertEqual(len(client.calls), 2)
 
     def test_ask_with_no_question_is_a_usage_error(self) -> None:
         with self.assertRaises(SystemExit) as raised:
