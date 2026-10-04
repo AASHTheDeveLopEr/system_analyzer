@@ -25,6 +25,7 @@ from tests._helpers import (
     FakeClient,
     TempDir,
     capability_answers,
+    noul,
     sample_inventory,
     score,
 )
@@ -122,6 +123,29 @@ class RateTests(CliCase):
 
 
 class AskTests(CliCase):
+    def _run_ask_tty(
+        self,
+        *argv: str,
+        answers: dict | None = None,
+        replies: list[str] | None = None,
+    ) -> tuple[int, str, str, FakeClient]:
+        """Run one-shot ``ask`` as if both ends of the console were a TTY.
+
+        ``_interactive_terminal`` is patched directly: a test's redirected
+        stdout is never a real terminal, and the offer only fires when
+        both sides agree. ``replies`` feeds the paste blocks; an empty
+        first reply ends the block immediately, so no checklist runs.
+        """
+        client = FakeClient(answers)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
+            with mock.patch.object(cli, "SystemOneClient", return_value=client):
+                with mock.patch.object(cli, "_interactive_terminal", return_value=True):
+                    with mock.patch("builtins.input", side_effect=replies or [""]):
+                        with redirect_stdout(out), redirect_stderr(err):
+                            code = cli.main(["--history-file", str(self.history_path()), *argv])
+        return code, out.getvalue(), err.getvalue(), client
+
     def test_ask_prints_a_verdict_and_a_confidence(self) -> None:
         code, out, _err = self.run_cli("ask", "Can I run Cyberpunk 2077?", answers=capability_answers(0.95))
         self.assertEqual(code, cli.EXIT_OK)
@@ -135,6 +159,87 @@ class AskTests(CliCase):
         self.assertEqual(code, cli.EXIT_UNGROUNDED)
         self.assertIn("Cannot tell", out)
         self.assertIn("requirements", out)
+
+    def test_an_ungrounded_verdict_is_offered_the_requirements_checklist(self) -> None:
+        # The offer exists for verdicts the specs cannot settle, and
+        # one-shot ask is exactly where a human meets them: it must
+        # offer the checklist the same way the interactive session does.
+        answers = capability_answers(0.9, grounding="specs_do_not_decide_it")
+        code, out, _err, client = self._run_ask_tty(
+            "ask", "Can I stream on Twitch?", answers=answers, replies=[""]
+        )
+        self.assertEqual(code, cli.EXIT_UNGROUNDED)
+        self.assertIn("Cannot tell", out)
+        self.assertIn("MINIMUM requirements", out)
+        # Entering nothing ends the paste block, so no checklist runs.
+        self.assertEqual(len(client.calls), 1)
+
+    def test_a_confident_grounded_verdict_is_not_offered_the_checklist(self) -> None:
+        answers = capability_answers(0.95)
+        code, out, _err, _client = self._run_ask_tty(
+            "ask", "Can I game?", answers=answers, replies=[""]
+        )
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertNotIn("The model could not judge", out)
+        self.assertNotIn("MINIMUM requirements", out)
+
+    def test_json_mode_never_stops_for_the_offer(self) -> None:
+        # A script cannot answer an interactive ask-back: it gets a
+        # machine-readable pointer in the document instead, and its
+        # stdout stays pure JSON.
+        answers = capability_answers(0.9, grounding="specs_do_not_decide_it")
+        code, out, _err, client = self._run_ask_tty(
+            "ask", "Can I stream on Twitch?", "--json", answers=answers, replies=[""]
+        )
+        self.assertEqual(code, cli.EXIT_UNGROUNDED)
+        self.assertNotIn("MINIMUM requirements", out)
+        self.assertEqual(len(client.calls), 1)
+        payload = json.loads(out)
+        self.assertTrue(payload["requirements_needed"])
+        self.assertIn("hint", payload)
+
+    def test_a_grounded_checklist_settles_an_ungrounded_ask(self) -> None:
+        # Pasting requirements this machine meets answers the
+        # question the specs could not: the checklist's grounded
+        # verdict decides the exit code, not the ungrounded ask.
+        answers = capability_answers(0.9, grounding="specs_do_not_decide_it")
+        replies = ["8 GB RAM; 3.6 GHz CPU", "", ""]
+        code, out, _err, client = self._run_ask_tty(
+            "ask", "Can I stream on Twitch?", answers=answers, replies=replies
+        )
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("Cannot tell", out)
+        self.assertIn("Meets the minimum", out)
+        # Every requirement is numeric, so the ask is the only
+        # model call the run makes.
+        self.assertEqual(len(client.calls), 1)
+
+    def test_an_ungrounded_ask_with_no_checklist_still_exits_four(self) -> None:
+        # A non-interactive run never sees the offer, so nothing
+        # can settle the question and the ungrounded code stands.
+        answers = capability_answers(0.9, grounding="specs_do_not_decide_it")
+        code, out, _err = self.run_cli(
+            "ask", "Can I stream on Twitch?", answers=answers
+        )
+        self.assertEqual(code, cli.EXIT_UNGROUNDED)
+        self.assertIn("Cannot tell", out)
+        self.assertNotIn("MINIMUM requirements", out)
+
+    def test_an_ungrounded_checklist_does_not_settle_the_ask(self) -> None:
+        # A checklist that runs but lands on "Cannot tell" settled
+        # nothing: the ask's ungrounded exit code stands.
+        answers = {
+            **capability_answers(0.9, grounding="specs_do_not_decide_it"),
+            "req_0": noul(0.5),
+        }
+        replies = ["GTX 970", "", ""]
+        code, out, _err, client = self._run_ask_tty(
+            "ask", "Can I game?", answers=answers, replies=replies
+        )
+        self.assertEqual(code, cli.EXIT_UNGROUNDED)
+        self.assertIn("Cannot tell", out)
+        # The named part was judged once for the ask, once for the checklist.
+        self.assertEqual(len(client.calls), 2)
 
     def test_ask_with_no_question_is_a_usage_error(self) -> None:
         with self.assertRaises(SystemExit) as raised:
