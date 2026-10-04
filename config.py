@@ -27,6 +27,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+import rankings
+
 CONFIG_ENV = "SYSTEM_ANALYZER_CONFIG"
 
 #: Where the model may answer "no" at all. Below this we say we cannot tell
@@ -96,6 +98,14 @@ MIN_FACTORS = 3
 
 #: A component scoring below this is called out as a bottleneck in verdicts.
 BOTTLENECK_SCORE = 45
+
+#: The curated capability tables (rankings.GPU_RANKINGS and
+#: friends) can be replaced through the config file, which is
+#: how a corrected score ships without a code change. The
+#: version string dates whichever ordering is in force.
+GPU_RANKINGS_KEY = "gpu_rankings"
+CPU_RANKINGS_KEY = "cpu_rankings"
+RANKINGS_VERSION_KEY = "rankings_version"
 
 # --------------------------------------------------------------------------
 # Component scoring curves
@@ -216,6 +226,7 @@ class Config:
             "min_factors": self.min_factors,
             "bottleneck_score": self.bottleneck_score,
             "rating_tiers": list(self.rating_tiers),
+            "rankings_version": self.rankings_version,
         }
 
     # Derived accessors, so the rest of the code never indexes a dict directly.
@@ -258,6 +269,26 @@ class Config:
     @property
     def rating_tiers(self) -> tuple[str, ...]:
         return tuple(self.get("rating_tiers", RATING_TIERS))
+
+    @property
+    def gpu_rankings(self) -> tuple[tuple[str, float], ...]:
+        """The GPU capability table in force."""
+        return self._rankings(GPU_RANKINGS_KEY, rankings.GPU_RANKINGS)
+
+    @property
+    def cpu_rankings(self) -> tuple[tuple[str, float], ...]:
+        """The CPU capability table in force."""
+        return self._rankings(CPU_RANKINGS_KEY, rankings.CPU_RANKINGS)
+
+    @property
+    def rankings_version(self) -> str:
+        """The date of the ordering in force, e.g. "2026-10"."""
+        return rankings.rankings_version(self)
+
+    def _rankings(
+        self, key: str, default: tuple[tuple[str, float], ...]
+    ) -> tuple[tuple[str, float], ...]:
+        return rankings.effective_table(key, default, self)
 
     def weights(self) -> dict[str, float]:
         return {k: float(v) for k, v in self.get("rating_weights", RATING_WEIGHTS).items()}
@@ -326,6 +357,15 @@ class Config:
         if len(tiers) < 2:
             raise ConfigError("rating_tiers needs at least 2 levels to be a scale")
 
+        for key in (GPU_RANKINGS_KEY, CPU_RANKINGS_KEY):
+            override = self.get(key)
+            if override is None:
+                continue
+            try:
+                rankings.validate_table(override)
+            except ValueError as error:
+                raise ConfigError(f"{key}: {error}") from error
+
 
 _DEFAULT_CURVES = {
     "cpu": CPU_CURVE,
@@ -384,4 +424,7 @@ def _known_keys() -> set[str]:
         "memory_curve",
         "gpu_curve",
         "storage_curve",
+        GPU_RANKINGS_KEY,
+        CPU_RANKINGS_KEY,
+        RANKINGS_VERSION_KEY,
     }

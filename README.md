@@ -55,6 +55,7 @@ Shared flags: `--json`, `--config`, `--history-file`, `--no-history`. Each comma
 - Total and available RAM, not only “free” memory
 - Dedicated VRAM only when a driver exposes it; shared memory stays `unknown`
 - Virtual adapters are dropped so a VM does not get a fictional GPU
+- Curated GPU/CPU capability rankings, offline, so parts compare across generations
 - Interactive menu and one-question-per-line pipe mode
 - 0–100 rating with a rule-only fallback when no endpoint answers
 - Requirement checklists: numbers checked locally, named parts judged by the model
@@ -70,6 +71,7 @@ Shared flags: `--json`, `--config`, `--history-file`, `--no-history`. Each comma
 |---|---|
 | `main.py` | Commands, interactive loop, settings menu, JSON output, exit codes |
 | `inventory.py` | Hardware detection only |
+| `rankings.py` | Curated GPU/CPU capability tables and name matching |
 | `system_one.py` | Request validation, HTTP transport, failover, typed answers |
 | `judgment.py` | Measured facts plus model answers, as a 0–100 rating |
 | `providers.py` | Provider catalog, chain, Ollama discovery |
@@ -136,7 +138,7 @@ echo "can I game?" | python main.py
 A small model cannot reliably answer an open “can this machine run X?” question. When an answer is unsure, the app can check a pasted list instead.
 
 - Numeric lines such as `8 GB RAM` or `60 GB storage` are compared with measured specs. No model call.
-- Named parts such as `GTX 970` become one yes/no question. An unsure model counts as unknown.
+- Named parts such as `GTX 970` are checked against a curated capability table first: when both the part and the machine are in the table, the answer is arithmetic, offline. Only an unknown part (or unknown machine) becomes one yes/no question. An unsure model counts as unknown.
 - Unparsed text is reported as not checked.
 
 Verdicts name the requirement and both numbers: meets recommended, meets minimum, or below minimum.
@@ -149,6 +151,24 @@ python main.py check "a game" --min-reqs "8 GB RAM; 50 GB storage"
 In `--json` mode, an unsure ask can return `"requirements_needed": true` instead of blocking on a prompt.
 
 The interactive requirements offer only fires for a one-shot `ask` in a terminal. It is skipped for `--json`, piped input, and `--repeat` runs, which never block on a prompt; in `--json` mode those runs get `"requirements_needed": true` in the JSON instead.
+
+---
+
+# Rankings overrides
+
+The curated GPU/CPU capability tables can be replaced through the config file pointed at by `--config` (or the `SYSTEM_ANALYZER_CONFIG` environment variable) — not `settings.py`'s `config.json`, which rejects unknown keys. Three keys are accepted:
+
+| Key | What it replaces |
+|---|---|
+| `gpu_rankings` | The whole GPU table, as a list of `[pattern, score]` pairs |
+| `cpu_rankings` | The whole CPU table, same form |
+| `rankings_version` | The version string the ordering is dated with |
+
+```json
+{"gpu_rankings": [["My GPU", 50.0]], "rankings_version": "2026-11"}
+```
+
+An override REPLACES the whole table: any part absent from it loses its `capability_score`, stays `unknown`, and its requirement checks fall back to the model. Scores must sit between 0 and 100; a malformed override is rejected loudly at startup.
 
 ---
 

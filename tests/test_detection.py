@@ -329,13 +329,32 @@ class PrivacyTests(unittest.TestCase):
         self.assertEqual(self._state()["memory"]["total_gib"], 32.0)
 
     def test_live_readings_stay_out_of_the_payload(self):
-        """Usage describes the moment, not the machine, so it never ships."""
+        """Usage describes the moment, not the machine, so it never ships.
+
+        The capability score is a machine property (which part is
+        installed), so it does ship; the usage percentage is a live
+        reading, so it does not.
+        """
         state = inventory.Inventory(
             cpu_usage_percent=23.4,
             memory=inventory.Memory(8 * inventory.GIB, 2 * inventory.GIB, 75.0),
         ).to_state()
-        self.assertEqual(set(state["cpu"]), {"name", "logical_cores", "clock_ghz"})
+        self.assertEqual(
+            set(state["cpu"]), {"name", "logical_cores", "clock_ghz", "capability_score"}
+        )
+        self.assertIsNone(state["cpu"]["capability_score"])
         self.assertEqual(set(state["memory"]), {"total_gib", "available_gib"})
+
+    def test_the_capability_score_rides_in_the_payload(self):
+        """The tier is what every model call receives as grounding."""
+        state = inventory.Inventory(
+            cpu_name="AMD Ryzen 5 3600",
+            cpu_capability=57.0,
+            gpus=(inventory.Gpu("NVIDIA GeForce RTX 3060", 12 * inventory.GIB,
+                                "nvml", "", 43.0),),
+        ).to_state()
+        self.assertEqual(state["cpu"]["capability_score"], 57.0)
+        self.assertEqual(state["gpus"][0]["capability_score"], 43.0)
 
 
 class MenuTests(unittest.TestCase):
