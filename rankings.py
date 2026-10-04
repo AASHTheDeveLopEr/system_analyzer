@@ -117,6 +117,7 @@ GPU_RANKINGS: tuple[tuple[str, float], ...] = (
     ("RTX 4070", 74.0),
     ("RTX 4060 Ti", 61.0),
     ("RTX 4060", 50.0),
+    ("RTX 4050", 34.0),
     # NVIDIA GeForce RTX 30 series (2020-2022)
     ("RTX 3090 Ti", 81.0),
     ("RTX 3090", 79.0),
@@ -137,12 +138,14 @@ GPU_RANKINGS: tuple[tuple[str, float], ...] = (
     ("RTX 2070", 49.0),
     ("RTX 2060 Super", 46.0),
     ("RTX 2060", 42.0),
+    ("RTX 2050", 30.0),
     # NVIDIA GeForce GTX 16 series (2019)
     ("GTX 1660 Super", 37.0),
     ("GTX 1660 Ti", 36.0),
     ("GTX 1660", 33.0),
     ("GTX 1650 Super", 24.0),
     ("GTX 1650", 23.0),
+    ("GTX 1630", 14.0),
     # NVIDIA GeForce GTX 10 series (2016-2017)
     ("GTX 1080 Ti", 39.0),
     ("GTX 1080", 35.0),
@@ -216,6 +219,8 @@ GPU_RANKINGS: tuple[tuple[str, float], ...] = (
     ("RX 6650 XT", 55.0),
     ("RX 6600 XT", 52.0),
     ("RX 6600", 39.0),
+    ("RX 6500 XT", 34.0),
+    ("RX 6400", 26.0),
     # AMD Radeon RX 5000 series (2019)
     ("RX 5700 XT", 44.0),
     ("RX 5700", 40.0),
@@ -246,7 +251,9 @@ GPU_RANKINGS: tuple[tuple[str, float], ...] = (
     ("Arc A770", 45.0),
     ("Arc A750", 42.0),
     ("Arc A580", 39.0),
+    ("Arc A530", 30.0),
     ("Arc A380", 20.0),
+    ("Arc A310", 13.0),
     # Apple silicon GPU tiers (reported as the chip name on
     # macOS). Approximate: Metal-benchmark ratios against the
     # discrete cards above, not a measured hierarchy.
@@ -316,8 +323,12 @@ CPU_RANKINGS: tuple[tuple[str, float], ...] = (
     ("Core Ultra 5 250K Plus", 94.0),
     ("Core Ultra 7 270K", 94.0),    ("Core Ultra 9 285K", 94.0),    ("Core Ultra 7 265K", 89.0),
     ("Core Ultra 5 250K", 91.0),
-    ("Core Ultra 5 225", 87.0),
+    ("Core Ultra 5 225", 84.0),
     ("Core Ultra 5 245K", 86.0),
+    ("Core Ultra 5 235K", 85.0),
+    ("Core Ultra 7 255K", 92.0),
+    ("Core Ultra 9 275K", 95.0),
+    ("Core Ultra 5 225K", 84.0),
     # Intel Core 14th generation (2023)
     ("Core i9-14900KS", 95.0),
     ("Core i9-14900K", 90.0),
@@ -357,7 +368,8 @@ CPU_RANKINGS: tuple[tuple[str, float], ...] = (
     ("Ryzen 7 7700", 84.0),
     ("Ryzen 5 7600X", 80.0),
     ("Ryzen 5 7600", 78.0),
-    ("Ryzen 5 7500F", 76.0),
+    ("Ryzen 5 7500F", 74.0),
+    ("Ryzen 5 7500X", 76.0),
     ("Ryzen 5 7600X3D", 84.0),
     # Intel Core 11th generation (2020-2021)
     ("Core i9-11900K", 78.0),
@@ -372,6 +384,8 @@ CPU_RANKINGS: tuple[tuple[str, float], ...] = (
     ("Core i5-1135G7", 62.0),
     ("Core i5-1130G7", 60.0),
     # Intel Core 10th generation (2019-2020)
+    ("Core i9-10980XE", 80.0),
+    ("Core i9-10940X", 78.0),
     ("Core i9-10900K", 75.0),
     ("Core i9-10900", 73.0),
     ("Core i7-10700K", 71.0),
@@ -385,9 +399,15 @@ CPU_RANKINGS: tuple[tuple[str, float], ...] = (
     ("Ryzen 7 5800X3D", 72.0),
     ("Ryzen 7 5800X", 71.0),
     ("Ryzen 7 5700X", 73.0),
+    ("Ryzen 7 5700G", 68.0),
+    ("Ryzen 7 5700GT", 69.0),
     ("Ryzen 5 5600X", 65.0),
+    ("Ryzen 5 5600G", 62.0),
+    ("Ryzen 5 5600GT", 63.0),
     ("Ryzen 5 5600", 63.0),
+    ("Ryzen 5 5500GT", 60.0),
     ("Ryzen 5 5500", 62.0),
+    ("Ryzen 5 5500GE", 58.0),
     # Intel Core 9th generation (2018-2019)
     ("Core i9-9900K", 70.0),
     ("Core i9-9900", 67.0),
@@ -476,6 +496,12 @@ CPU_RANKINGS: tuple[tuple[str, float], ...] = (
     ("Core i3-9100", 55.0),
     ("Core i3-8100", 54.0),
     # Common Intel laptop chips (Alder Lake and newer)
+    ("Core Ultra 9 185H", 82.0),
+    ("Core Ultra 7 165H", 76.0),
+    ("Core Ultra 7 155H", 74.0),
+    ("Core Ultra 5 135H", 70.0),
+    ("Core Ultra 5 125H", 68.0),
+    ("Core Ultra 7 145H", 72.0),
     ("Core i7-1355U", 70.0),
     ("Core i7-1365U", 72.0),
     ("Core i7-13700H", 82.0),
@@ -506,9 +532,10 @@ CPU_RANKINGS: tuple[tuple[str, float], ...] = (
     ("Ryzen 5 7535U", 62.0),
     ("Ryzen 7 7700S", 84.0),
     ("Ryzen 5 7600GE", 74.0),
-    ("Ryzen 7 8700G", 72.0),
     ("Ryzen 5 8600G", 66.0),
     ("Ryzen 5 8500G", 62.0),
+    ("Ryzen 5 8300G", 58.0),
+    ("Ryzen 7 8700G", 72.0),
     # Intel Celeron / Pentium / Atom, the floor
     ("Core i3-N305", 40.0),
     ("Pentium Gold G7400", 20.0),
