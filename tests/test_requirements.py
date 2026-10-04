@@ -16,6 +16,7 @@ import unittest
 import requirements
 import system_one
 from system_one import Decision
+from config import Config
 from tests._helpers import TempDir
 
 STATE = {
@@ -168,6 +169,78 @@ class NamedPartTests(TempDir):
         states = {item.raw: item.state for item in result.items}
         self.assertEqual(states["4 GB RAM"], "passed")
         self.assertEqual(states["GTX 970"], "passed")
+
+
+class ReportableFloorTests(TempDir):
+    """The checklist gets the same reportable floor as the verdict.
+
+    ``ask`` and ``check`` must treat the same confidence the same
+    way: a checklist under the floor keeps its verdict and its
+    number, and gains the flag, the note, and the label.
+    """
+
+    def test_a_checklist_below_the_floor_is_called_a_guess(self):
+        # One named part judged at P=0.9 earns confidence 90;
+        # with the floor raised to 95 the checklist is under it.
+        result = requirements.check_requirements(
+            STATE, "task", "GTX 970", None, StubClient(0.9),
+            config=Config({"min_reportable_confidence": 95}),
+        )
+        self.assertEqual(result.confidence, 90)
+        self.assertTrue(result.low_confidence)
+        self.assertTrue(result.to_dict()["low_confidence"])
+        self.assertTrue(any("reportable floor" in n for n in result.notes))
+        self.assertTrue(
+            any("treat this verdict as a guess" in n for n in result.notes)
+        )
+
+    def test_a_confident_checklist_is_not_flagged(self):
+        result = requirements.check_requirements(
+            STATE, "task", "GTX 970", None, StubClient(0.9),
+        )
+        self.assertGreaterEqual(result.confidence, Config().min_reportable_confidence)
+        self.assertFalse(result.low_confidence)
+        self.assertFalse(result.to_dict()["low_confidence"])
+        self.assertFalse(any("reportable floor" in n for n in result.notes))
+
+    def test_the_floor_labels_without_changing_the_checklist(self):
+        # Same answers, same confidence; only the floor differs.
+        flagged = requirements.check_requirements(
+            STATE, "task", "GTX 970", None, StubClient(0.9),
+            config=Config({"min_reportable_confidence": 95}),
+        )
+        plain = requirements.check_requirements(
+            STATE, "task", "GTX 970", None, StubClient(0.9),
+        )
+        self.assertEqual(flagged.verdict, plain.verdict)
+        self.assertEqual(flagged.confidence, plain.confidence)
+        self.assertTrue(flagged.low_confidence)
+        self.assertFalse(plain.low_confidence)
+
+    def test_a_config_without_the_setting_still_composes(self):
+        # getattr, so config objects that predate the setting
+        # fall back to the declared default of 20.
+        class LegacyConfig:
+            uncertain_margin = 0.10
+
+        result = requirements.check_requirements(
+            STATE, "task", "GTX 970", None, StubClient(0.9),
+            config=LegacyConfig(),
+        )
+        self.assertEqual(result.confidence, 90)
+        self.assertFalse(result.low_confidence)
+
+    def test_the_floor_is_read_from_any_config_object(self):
+        class LegacyConfig:
+            uncertain_margin = 0.10
+            min_reportable_confidence = 95
+
+        result = requirements.check_requirements(
+            STATE, "task", "GTX 970", None, StubClient(0.9),
+            config=LegacyConfig(),
+        )
+        self.assertTrue(result.low_confidence)
+        self.assertTrue(any("reportable floor (95%)" in n for n in result.notes))
 
 
 if __name__ == "__main__":

@@ -107,6 +107,7 @@ class CapabilityVerdict:
     provider: str | None = None
     grounded: bool = True
     uncertain: bool = False
+    low_confidence: bool = False
     bottlenecks: list[str] = field(default_factory=list)
     sub_scores: list[ComponentScore] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -123,6 +124,7 @@ class CapabilityVerdict:
             "model": self.model,
             "grounded": self.grounded,
             "uncertain": self.uncertain,
+            "low_confidence": self.low_confidence,
             "bottlenecks": list(self.bottlenecks),
             "sub_scores": [c.to_dict() for c in self.sub_scores],
             "notes": list(self.notes),
@@ -506,7 +508,10 @@ def answer_capability(inventory: Any, question: str, client: Any, config: Any = 
     pushed *down* wherever the evidence is weak: a probability near a coin
     flip, a second opinion that disagrees, or a question the hardware does not
     determine. There is no floor and no rounding up -- if the evidence does not
-    support a number, the answer says so instead of inventing one.
+    support a number, the answer says so instead of inventing one. A confidence
+    under ``min_reportable_confidence`` does not change the band: the verdict
+    still reads the same, but it is labelled a guess rather than shown as a
+    plain, confident-looking answer.
     """
     config = _config(config)
     question = (question or "").strip()
@@ -544,6 +549,10 @@ def answer_capability(inventory: Any, question: str, client: Any, config: Any = 
         confidence = min(confidence, config.ungrounded_confidence_cap, ground_conf)
 
     confidence = int(round(max(0.0, min(100.0, confidence))))
+    # The reportable floor labels, it does not hide: a verdict below the
+    # floor keeps its band, but the user is told to treat it as a guess
+    # instead of a plain answer.
+    low_confidence = confidence < config.min_reportable_confidence
 
     bottlenecks = [c for c in subscores if c.known and c.score <= config.bottleneck_score]
     if not bottlenecks:
@@ -552,9 +561,15 @@ def answer_capability(inventory: Any, question: str, client: Any, config: Any = 
     bottleneck_names = [f"{c.name} ({c.detail})" for c in bottlenecks]
 
     explanation = _explain(verdict, question, bottlenecks, probability, grounded, uncertain)
-    all_notes = [n for n in (notes,) if n] + (
-        [f"not counted in the rating: {c.name} ({c.detail})" for c in subscores if not c.known]
-    )
+    all_notes = [n for n in (notes,) if n]
+    if low_confidence:
+        all_notes.append(
+            f"confidence is below the reportable floor "
+            f"({config.min_reportable_confidence}%); treat this answer as a guess"
+        )
+    all_notes += [
+        f"not counted in the rating: {c.name} ({c.detail})" for c in subscores if not c.known
+    ]
 
     return CapabilityVerdict(
         verdict=verdict,
@@ -567,6 +582,7 @@ def answer_capability(inventory: Any, question: str, client: Any, config: Any = 
         provider=decision.provider,
         grounded=grounded,
         uncertain=uncertain,
+        low_confidence=low_confidence,
         bottlenecks=bottleneck_names,
         sub_scores=subscores,
         notes=all_notes,

@@ -673,7 +673,10 @@ def _print_checklist(result: Any, reporter: Reporter) -> None:
     reporter.say("")
     reporter.say(f"  Checklist  : {result.task}")
     reporter.say(f"  Verdict    : {result.verdict}")
-    reporter.say(f"  Confidence : {result.confidence}%")
+    confidence_line = f"  Confidence : {result.confidence}%"
+    if result.low_confidence:
+        confidence_line += "  (below the reportable floor -- a guess)"
+    reporter.say(confidence_line)
     reporter.say("")
     for item in result.items:
         if item.state in ("passed", "failed"):
