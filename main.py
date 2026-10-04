@@ -370,8 +370,10 @@ def cmd_ask(
             return _ask_repeated(machine, args.question, client, repeat, args, history, reporter)
 
         _verdict, code = _ask_once(machine, args.question, client, args, history, reporter)
-        if code == EXIT_OK:
-            _offer_requirements(machine, _verdict, args, reporter, client)
+        # Offered unconditionally: the checklist is for the verdicts that
+        # most need it (coin-flip or ungrounded), and _offer_requirements
+        # no-ops for grounded verdicts, --json, and non-interactive runs.
+        _offer_requirements(machine, _verdict, args, reporter, client)
         return code
     except SystemOneError as error:
         reporter.note(f"no System One endpoint answered: {error}")
