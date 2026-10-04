@@ -232,7 +232,7 @@ class ProviderChainTests(unittest.TestCase):
         """A client whose endpoints fail or succeed in the given order."""
         providers = [
             {"name": "first", "url": "https://a.example", "model": "m1",
-             "source": "free", "auth": "Bearer public"},
+             "source": "free", "auth": ""},
             {"name": "second", "url": "https://b.example", "model": "m2",
              "source": "paid", "auth": "Bearer secret"},
         ]

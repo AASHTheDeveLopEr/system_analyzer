@@ -215,7 +215,9 @@ class ChainOptInTests(IsolatedSettings):
     def test_free_works_without_a_key(self):
         endpoints, _ = providers.chain()
         self.assertEqual(endpoints[0]["name"], "jev-free")
-        self.assertEqual(endpoints[0]["auth"], "Bearer public")
+        # No key means no auth header: "Bearer public" would be a
+        # credential Zen never issued.
+        self.assertEqual(endpoints[0]["auth"], "")
 
     def test_a_free_key_is_used_when_present(self):
         """So the tool survives the day the open tier closes."""
