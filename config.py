@@ -64,8 +64,9 @@ UNCERTAIN_CONFIDENCE_CAP = 45
 #: same request disagree. Disagreement is evidence of a shaky answer.
 DISAGREEMENT_PENALTY = 15
 
-#: Minimum confidence a verdict must have to be shown as a plain verdict at
-#: all; below this the user is told the answer is a guess.
+#: Minimum confidence a verdict needs to be shown as a plain verdict;
+#: below this the verdict is labelled a guess, not hidden -- the band
+#: stays the same, and a note says to treat it as a guess.
 MIN_REPORTABLE_CONFIDENCE = 20
 
 #: Allowed confidence drift across repeated identical questions, in points
@@ -290,6 +291,24 @@ class Config:
             raise ConfigError("model_blend must be between 0 and 1")
         if not 0.0 <= self.uncertain_margin <= 0.5:
             raise ConfigError("uncertain_margin must be between 0 and 0.5")
+
+        # The floor is a count of percentage points, so it has to be
+        # a whole number on the 0-100 scale. Checking it here turns
+        # "twenty" into a config error (exit 2) instead of a traceback
+        # the first time the property is read, and stops -5 (which
+        # would flag nothing) and 500 (which would flag everything)
+        # from silently changing what every verdict looks like.
+        floor = self.get("min_reportable_confidence", MIN_REPORTABLE_CONFIDENCE)
+        if isinstance(floor, bool) or not isinstance(floor, int):
+            raise ConfigError(
+                f"min_reportable_confidence must be an integer between "
+                f"0 and 100, got {floor!r}"
+            )
+        if not 0 <= floor <= 100:
+            raise ConfigError(
+                f"min_reportable_confidence must be between 0 and 100, "
+                f"got {floor}"
+            )
 
         for name, curve in (
             ("cpu", self.curve("cpu")),

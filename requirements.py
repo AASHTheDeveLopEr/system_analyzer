@@ -118,12 +118,14 @@ class CheckResult:
     unchecked: list[str]
     notes: list[str]
     model_unavailable: bool = False
+    low_confidence: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "task": self.task,
             "verdict": self.verdict,
             "confidence": self.confidence,
+            "low_confidence": self.low_confidence,
             "items": [i.to_dict() for i in self.items],
             "unchecked": list(self.unchecked),
             "notes": list(self.notes),
@@ -275,7 +277,7 @@ def check_requirements(
         notes.append("no System One endpoint answered, so the named parts could not be judged")
 
     return _compose(task, items, notes, unchecked_min + unchecked_rec,
-                    ignored_min + ignored_rec, model_unavailable)
+                    ignored_min + ignored_rec, model_unavailable, config)
 
 
 def _check_numeric(requirement: Requirement, tier: str,
@@ -354,7 +356,8 @@ def _unknown_item(item: CheckItem, reason: str) -> CheckItem:
 
 
 def _compose(task: str, items: list[CheckItem], notes: list[str], unchecked: list[str],
-             ignored: list[str], model_unavailable: bool) -> CheckResult:
+             ignored: list[str], model_unavailable: bool,
+             config: Any = None) -> CheckResult:
     fails_min = [i for i in items if i.tier == "minimum" and i.state == "failed"]
     fails_rec = [i for i in items if i.tier == "recommended" and i.state == "failed"]
     passes_min = [i for i in items if i.tier == "minimum" and i.state == "passed"]
@@ -378,6 +381,15 @@ def _compose(task: str, items: list[CheckItem], notes: list[str], unchecked: lis
         for i in items if i.probability is not None and i.state in ("passed", "failed")
     ]
     confidence = int(round(min(model_confidences))) if model_confidences else 100
+    confidence = max(0, min(100, confidence))
+
+    # The reportable floor labels, it does not hide: a checklist
+    # below the floor keeps its verdict and its number, but the
+    # user is told to treat it as a guess instead of a plain,
+    # confident-looking answer. getattr, so a config object that
+    # predates the setting still composes.
+    floor = getattr(config, "min_reportable_confidence", 20)
+    low_confidence = confidence < floor
 
     notes = list(notes)
     if unchecked:
@@ -386,9 +398,14 @@ def _compose(task: str, items: list[CheckItem], notes: list[str], unchecked: lis
     if ignored:
         notes.append(f"{len(ignored)} line(s) were platform or peripheral notes, "
                      "not hardware requirements")
+    if low_confidence:
+        notes.append(
+            f"confidence is below the reportable floor "
+            f"({floor}%); treat this verdict as a guess"
+        )
 
     return CheckResult(
-        task=task, verdict=verdict, confidence=max(0, min(100, confidence)),
+        task=task, verdict=verdict, confidence=confidence,
         items=items, unchecked=list(unchecked), notes=notes,
-        model_unavailable=model_unavailable,
+        model_unavailable=model_unavailable, low_confidence=low_confidence,
     )
