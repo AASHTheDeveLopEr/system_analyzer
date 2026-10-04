@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 import main as cli
 import inventory
+import settings
 import system_one
 from system_one import SystemOneError
 from tests._helpers import (
@@ -243,6 +245,103 @@ class PayloadAndConfigTests(CliCase):
         self.assertEqual(code, cli.EXIT_USAGE)
         self.assertIn("config error", err.getvalue())
         self.assertEqual(out.getvalue(), "")
+
+
+class SettingsErrorTests(TempDir):
+    """A config.json that cannot be used is exit 2, not a traceback.
+
+    ``main()`` already keeps that promise for the ``--config`` thresholds
+    file; these tests hold it for the settings file, which loads lazily:
+    the provider chain is built inside whichever command needs it, so the
+    exit-code contract has to be enforced around the dispatch.
+
+    ``SystemOneClient`` is deliberately left real here -- its constructor
+    is where the chain is built, and a broken config.json raises there,
+    before any endpoint is contacted, so these runs stay offline.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # A developer machine may carry a live provider choice in the
+        # environment, and the environment would win over the broken
+        # config.json under test, so the variables are cleared rather
+        # than trusted to be absent.
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for name in (
+            settings.TYPESAFE_KEY_ENV,
+            settings.ZEN_KEY_ENV,
+            settings.PROVIDERS_ENV,
+            settings.OLLAMA_URL_ENV,
+            settings.OLLAMA_MODEL_ENV,
+            settings.CLOUD_FALLBACK_ENV,
+        ):
+            os.environ.pop(name, None)
+
+    def run_cli(self, *argv: str, stdin: str = "") -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(inventory, "detect_inventory", return_value=sample_inventory()):
+            with mock.patch.object(cli.sys, "stdin", io.StringIO(stdin)):
+                with redirect_stdout(out), redirect_stderr(err):
+                    code = cli.main(["--history-file", str(self.tmp / "history.json"), *argv])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_an_unknown_key_in_config_json_is_exit_two_not_a_traceback(self) -> None:
+        self.write("config.json", json.dumps({"openrouter_model": "some-model"}))
+        code, out, err = self.run_cli("rate")
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertEqual(out, "")
+        self.assertIn("settings error", err)
+        self.assertIn("openrouter_model", err)
+
+    def test_an_unknown_provider_id_in_the_chain_is_exit_two(self) -> None:
+        self.write("config.json", json.dumps({"provider_chain": "openrouter"}))
+        code, out, err = self.run_cli("rate")
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertEqual(out, "")
+        self.assertIn("settings error", err)
+        self.assertIn("openrouter", err)
+
+    def test_a_valid_config_json_still_works(self) -> None:
+        self.write("config.json", json.dumps({"provider_chain": "zen"}))
+        code, out, _err = self.run_cli("config")
+        self.assertEqual(code, cli.EXIT_OK)
+        payload = json.loads(out)
+        self.assertEqual(
+            payload["providers"]["provider_chain"],
+            {"value": ["zen"], "origin": "config.json"},
+        )
+
+    def test_every_settings_touching_command_exits_two(self) -> None:
+        # The wrapper sits around the dispatch, so the contract holds for
+        # every command, wherever its settings load happens: the client
+        # constructor (rate, ask, check), the provider document (config),
+        # the chain itself (payload), the session loop (session), and
+        # onboarding (setup, whose only gate is the interactive check).
+        self.write("config.json", json.dumps({"provider_chain": "openrouter"}))
+        cases: list[tuple[list[str], str]] = [
+            (["rate"], ""),
+            (["ask", "can I game?"], ""),
+            (["check", "Office", "--min-reqs", "4 GB RAM"], ""),
+            (["config"], ""),
+            (["payload"], ""),
+            (["session"], "can I game?\n"),
+            (["setup"], ""),
+        ]
+        for argv, stdin in cases:
+            with self.subTest(command=argv[0]):
+                # setup is interactive-only; lifting that gate is what
+                # lets onboarding reach the settings load. The other
+                # commands are not interactive in tests anyway.
+                interactive = argv[0] == "setup"
+                with mock.patch.object(
+                    cli, "_interactive_terminal", return_value=interactive
+                ):
+                    code, _out, err = self.run_cli(*argv, stdin=stdin)
+                self.assertEqual(code, cli.EXIT_USAGE, err)
+                self.assertIn("settings error", err)
+                self.assertNotIn("Traceback", err)
 
 
 class SessionTests(CliCase):

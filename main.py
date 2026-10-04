@@ -21,7 +21,7 @@ codes that mean something::
 
     0  worked
     1  something went wrong
-    2  bad command line
+    2  bad command line, or a config.json that cannot be used
     3  no System One endpoint answered -- degraded, output is still valid
     4  the question could not be grounded in your hardware -- no verdict given
 
@@ -1196,11 +1196,22 @@ def main(argv: list[str] | None = None) -> int:
         "setup": cmd_setup,
     }
 
-    if args.command is None:
-        # No command: a terminal gets the interactive app, a pipe gets a
-        # question loop -- one answer per line.
-        return cmd_interactive(args, reporter)
-    return handlers[args.command](args, reporter)
+    try:
+        if args.command is None:
+            # No command: a terminal gets the interactive app, a pipe gets a
+            # question loop -- one answer per line.
+            return cmd_interactive(args, reporter)
+        return handlers[args.command](args, reporter)
+    except settings_module.SettingsError as error:
+        # Settings load lazily: the provider chain is built when a command
+        # first needs it (the client's constructor, the payload document,
+        # the settings menu), not at startup. A config.json that cannot be
+        # used -- unknown key, unknown provider, unreadable file --
+        # therefore surfaces here, from deep inside a command. The promise
+        # in settings.py is a clean exit 2, not a traceback: the user
+        # needs the one line that says which file to fix.
+        print(f"settings error: {error}", file=sys.stderr)
+        return EXIT_USAGE
 
 
 if __name__ == "__main__":
