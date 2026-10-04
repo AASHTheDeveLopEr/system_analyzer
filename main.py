@@ -105,9 +105,14 @@ def _provenance(decision_or_rating: Any) -> str:
 # --------------------------------------------------------------------------
 
 
-def _detect() -> Any:
-    """This machine's hardware inventory."""
-    return inventory.detect_inventory()
+def _detect(config: Any = None) -> Any:
+    """This machine's hardware inventory.
+
+    ``config`` selects the capability tables in force, so the
+    rankings carried by the inventory match the ones the rest of
+    the run uses.
+    """
+    return inventory.detect_inventory(config)
 
 
 def _client() -> SystemOneClient:
@@ -145,7 +150,7 @@ def _elapsed_text(seconds: float) -> str:
 
 
 def cmd_specs(args: argparse.Namespace, reporter: Reporter, detected: Any = None) -> int:
-    machine = detected or _detect()
+    machine = detected or _detect(args.config_object)
 
     if args.json:
         reporter.data({"inventory": machine.to_state(), "labels": dict(machine.lines())})
@@ -169,7 +174,7 @@ def cmd_specs(args: argparse.Namespace, reporter: Reporter, detected: Any = None
 
 def cmd_payload(args: argparse.Namespace, reporter: Reporter) -> int:
     """Show exactly what would be sent to a System One endpoint."""
-    state = _detect().to_state()
+    state = _detect(args.config_object).to_state()
     endpoints, skipped = providers_module.chain()
     reporter.data(
         {
@@ -232,7 +237,7 @@ def _print_rating(rating: Any, reporter: Reporter) -> None:
 def cmd_rate(
     args: argparse.Namespace, reporter: Reporter, detected: Any = None, client: Any = None
 ) -> int:
-    machine = detected or _detect()
+    machine = detected or _detect(args.config_object)
     client = client or _client()
     repeat = getattr(args, "repeat", 1)
 
@@ -360,7 +365,7 @@ def cmd_ask(
     if getattr(args, "check", False):
         return cmd_check(args, reporter, detected=detected, client=client)
 
-    machine = detected or _detect()
+    machine = detected or _detect(args.config_object)
     client = client or _client()
     history = History(args.history_file, reporter)
 
@@ -496,10 +501,10 @@ def cmd_interactive(args: argparse.Namespace, reporter: Reporter) -> int:
 
         if menu_mode and line in _MENU_CHOICES:
             if line == "1":
-                machine = machine or _detect()
+                machine = machine or _detect(args.config_object)
                 cmd_specs(args, reporter, detected=machine)
             elif line == "2":
-                machine = machine or _detect()
+                machine = machine or _detect(args.config_object)
                 client = client or _client()
                 cmd_rate(args, reporter, detected=machine, client=client)
             elif line == "3":
@@ -508,7 +513,7 @@ def cmd_interactive(args: argparse.Namespace, reporter: Reporter) -> int:
                 except (EOFError, KeyboardInterrupt):
                     break
                 if question:
-                    machine = machine or _detect()
+                    machine = machine or _detect(args.config_object)
                     client = client or _client()
                     if question.lower() == "check" or question.lower().startswith("check "):
                         # Requirements already in hand: straight to the checklist,
@@ -534,7 +539,7 @@ def cmd_interactive(args: argparse.Namespace, reporter: Reporter) -> int:
             continue
 
         if lowered == "check" or lowered.startswith("check "):
-            machine = machine or _detect()
+            machine = machine or _detect(args.config_object)
             client = client or _client()
             _interactive_check(
                 args, reporter, task=line[6:].strip() or None, detected=machine, client=client
@@ -543,7 +548,7 @@ def cmd_interactive(args: argparse.Namespace, reporter: Reporter) -> int:
 
         # Anything else is the question itself, so "can I game?" works without
         # going through the menu.
-        machine = machine or _detect()
+        machine = machine or _detect(args.config_object)
         client = client or _client()
         _ask_in_session(args, reporter, history, line, machine, client)
 
@@ -610,10 +615,13 @@ def cmd_check(
 ) -> int:
     """Check pasted requirements ("8 GB RAM; GTX 970") against this machine.
 
-    Numeric requirements are compared directly against the measured specs;
-    named parts ("GTX 970") go to the provider as atomic questions.
+    Numeric requirements are compared directly against the measured
+    specs; named parts ("GTX 970") are settled by the curated
+    capability tables when both sides are known, and only an
+    unknown part or machine goes to the provider as an atomic
+    question.
     """
-    machine = detected or _detect()
+    machine = detected or _detect(args.config_object)
     task = args.question or "your task"
     minimum_text = getattr(args, "min_reqs", None)
     recommended_text = getattr(args, "rec_reqs", None)
@@ -699,7 +707,7 @@ def _interactive_check(
     """
     if not task:
         task = _prompt("What is it for? > ") or "your task"
-    machine = detected or _detect()
+    machine = detected or _detect(args.config_object)
     minimum = _paste_block(reporter, "  Paste the MINIMUM requirements, one per line")
     if not minimum:
         reporter.say("  Nothing to check.")

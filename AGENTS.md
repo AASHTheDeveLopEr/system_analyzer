@@ -67,6 +67,7 @@ inventory.py ──detect──▶ main.py ──ask──▶ system_one.py
 |---|---|
 | `main.py` | Commands, interactive loop, JSON output, exit codes |
 | `inventory.py` | Hardware only: CPU, RAM, GPU/VRAM, disks, OS |
+| `rankings.py` | Curated GPU/CPU capability tables, matching, tier labels |
 | `system_one.py` | Request validation, HTTP failover, typed answers |
 | `judgment.py` | Facts plus model answers, as a 0–100 rating |
 | `providers.py` | Endpoint catalog, chain, Ollama discovery |
@@ -135,7 +136,7 @@ Before a model call the app prints who is being asked and the timeout. Repeats p
 
 # Requirement checks
 
-Numeric lines such as `8 GB RAM` are compared with measured specs. No model call. Named parts such as `GTX 970` become one yes/no question. An unsure model counts as unknown. Unparsed text is not checked.
+Numeric lines such as `8 GB RAM` are compared with measured specs. No model call. Named parts such as `GTX 970` are settled by the curated capability tables when both sides are known (`rankings.py`); only an unknown part or unknown machine becomes one yes/no question. An unsure model counts as unknown. Unparsed text is not checked.
 
 Verdicts name the requirement and both numbers: meets recommended, meets minimum, or below minimum.
 

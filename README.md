@@ -55,6 +55,7 @@ Shared flags: `--json`, `--config`, `--history-file`, `--no-history`. Each comma
 - Total and available RAM, not only “free” memory
 - Dedicated VRAM only when a driver exposes it; shared memory stays `unknown`
 - Virtual adapters are dropped so a VM does not get a fictional GPU
+- Curated GPU/CPU capability rankings, offline, so parts compare across generations
 - Interactive menu and one-question-per-line pipe mode
 - 0–100 rating with a rule-only fallback when no endpoint answers
 - Requirement checklists: numbers checked locally, named parts judged by the model
@@ -70,6 +71,7 @@ Shared flags: `--json`, `--config`, `--history-file`, `--no-history`. Each comma
 |---|---|
 | `main.py` | Commands, interactive loop, settings menu, JSON output, exit codes |
 | `inventory.py` | Hardware detection only |
+| `rankings.py` | Curated GPU/CPU capability tables and name matching |
 | `system_one.py` | Request validation, HTTP transport, failover, typed answers |
 | `judgment.py` | Measured facts plus model answers, as a 0–100 rating |
 | `providers.py` | Provider catalog, chain, Ollama discovery |
@@ -136,7 +138,7 @@ echo "can I game?" | python main.py
 A small model cannot reliably answer an open “can this machine run X?” question. When an answer is unsure, the app can check a pasted list instead.
 
 - Numeric lines such as `8 GB RAM` or `60 GB storage` are compared with measured specs. No model call.
-- Named parts such as `GTX 970` become one yes/no question. An unsure model counts as unknown.
+- Named parts such as `GTX 970` are checked against a curated capability table first: when both the part and the machine are in the table, the answer is arithmetic, offline. Only an unknown part (or unknown machine) becomes one yes/no question. An unsure model counts as unknown.
 - Unparsed text is reported as not checked.
 
 Verdicts name the requirement and both numbers: meets recommended, meets minimum, or below minimum.
