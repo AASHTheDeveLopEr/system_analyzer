@@ -16,8 +16,8 @@ fails loudly instead of silently keeping a default you thought you changed.
 
 These are *starting points*, not blessed product values. The weights in
 particular encode a judgement about what a general-purpose 0-100 rating should
-reward, and that judgement has not been made by anybody yet. They are in a file so that arguing about them is a
-diff, not a code change.
+reward, and that judgement has not been made by anybody yet. They are in a
+file so that arguing about them is a diff, not a code change.
 """
 
 from __future__ import annotations
@@ -71,8 +71,7 @@ DISAGREEMENT_PENALTY = 15
 #: stays the same, and a note says to treat it as a guess.
 MIN_REPORTABLE_CONFIDENCE = 20
 
-#: Allowed confidence drift across repeated identical questions, in points
-#:.
+#: Allowed confidence drift across repeated identical questions, in points.
 STABILITY_TOLERANCE = 5
 
 # --------------------------------------------------------------------------

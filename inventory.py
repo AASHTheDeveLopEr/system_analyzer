@@ -23,7 +23,6 @@ this moment, not the machine, so they stay out of the state sent to the model.
 from __future__ import annotations
 
 import contextlib
-import os
 import platform
 from dataclasses import dataclass
 from typing import Any

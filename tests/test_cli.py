@@ -19,7 +19,6 @@ import main as cli
 import inventory
 import judgment
 import settings
-import system_one
 from system_one import SystemOneError
 from tests._helpers import (
     FakeClient,

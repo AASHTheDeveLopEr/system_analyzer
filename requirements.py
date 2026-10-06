@@ -21,7 +21,7 @@ Anything that parses to neither is reported as unchecked. Nothing is guessed.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 import rankings
@@ -75,14 +75,6 @@ class Requirement:
     raw: str
     value: float | None = None
     unit: str = ""
-
-
-@dataclass(frozen=True)
-class ParsedRequirements:
-    minimum: list[Requirement] = field(default_factory=list)
-    recommended: list[Requirement] = field(default_factory=list)
-    unchecked: list[str] = field(default_factory=list)
-    ignored: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

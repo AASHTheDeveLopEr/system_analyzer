@@ -179,14 +179,23 @@ def cmd_payload(args: argparse.Namespace, reporter: Reporter) -> int:
     reporter.data(
         {
             "state": state,
-            "providers": [
-                {"name": p["name"], "url": p["url"], "model": p["model"], "source": p["source"]}
-                for p in endpoints
-            ],
+            "providers": _endpoint_summaries(endpoints),
             "skipped": skipped,
         }
     )
     return EXIT_OK
+
+
+def _endpoint_summaries(endpoints: list[dict]) -> list[dict[str, Any]]:
+    """The printable fields of each endpoint, without anything secret.
+
+    The provider dicts carry the Authorization header, so only these four
+    fields are ever copied into a document that gets printed.
+    """
+    return [
+        {"name": p["name"], "url": p["url"], "model": p["model"], "source": p["source"]}
+        for p in endpoints
+    ]
 
 
 def cmd_config(args: argparse.Namespace, reporter: Reporter) -> int:
@@ -206,10 +215,7 @@ def _providers_document() -> dict[str, Any]:
     document = settings.to_dict()
     endpoints, skipped = providers_module.chain()
     document["chain"] = {
-        "endpoints": [
-            {"name": p["name"], "url": p["url"], "model": p["model"], "source": p["source"]}
-            for p in endpoints
-        ],
+        "endpoints": _endpoint_summaries(endpoints),
         "skipped": skipped,
     }
     return document
@@ -457,7 +463,10 @@ def _ask_repeated(
         _print_verdict(verdicts[0], reporter)
         reporter.say("")
         reporter.say(f"  {repeat} runs: {', '.join(bands)}")
-        reporter.say(f"  confidence : {min(confidences)}-{max(confidences)}% (spread {spread}, tolerance {tolerance})")
+        reporter.say(
+            f"  confidence : {min(confidences)}-{max(confidences)}% "
+            f"(spread {spread}, tolerance {tolerance})"
+        )
         reporter.say(f"  stable     : {'yes' if stable else 'no'}")
         reporter.say("")
     return EXIT_OK
@@ -635,6 +644,11 @@ def _print_menu(reporter: Reporter) -> None:
 # Requirement checklists (the ask-back)
 # --------------------------------------------------------------------------
 
+#: Pasted into by every checklist entry point, so the wording cannot drift
+#: between ``check``, the session's ``check`` line and the ask-back offer.
+MINIMUM_PROMPT = "  Paste the MINIMUM requirements, one per line"
+RECOMMENDED_PROMPT = "  Recommended specs, one per line (optional)"
+
 
 def cmd_check(
     args: argparse.Namespace, reporter: Reporter, detected: Any = None, client: Any = None
@@ -652,8 +666,8 @@ def cmd_check(
     minimum_text = getattr(args, "min_reqs", None)
     recommended_text = getattr(args, "rec_reqs", None)
     if not minimum_text and not args.json and _interactive_terminal():
-        minimum_text = _paste_block(reporter, "  Paste the MINIMUM requirements, one per line")
-        recommended_text = _paste_block(reporter, "  Recommended specs, one per line (optional)")
+        minimum_text = _paste_block(reporter, MINIMUM_PROMPT)
+        recommended_text = _paste_block(reporter, RECOMMENDED_PROMPT)
     if not minimum_text:
         reporter.note(
             'no requirements given; use --min-reqs "8 GB RAM; 2 GHz CPU" or run interactively'
@@ -753,11 +767,11 @@ def _interactive_check(
     if not task:
         task = _prompt("What is it for? > ") or "your task"
     machine = detected or _detect(args.config_object)
-    minimum = _paste_block(reporter, "  Paste the MINIMUM requirements, one per line")
+    minimum = _paste_block(reporter, MINIMUM_PROMPT)
     if not minimum:
         reporter.say("  Nothing to check.")
         return
-    recommended = _paste_block(reporter, "  Recommended specs, one per line (optional)")
+    recommended = _paste_block(reporter, RECOMMENDED_PROMPT)
     _run_checklist(machine, task, minimum, recommended, args, reporter, client)
 
 
@@ -803,7 +817,7 @@ def _offer_requirements(
     if not minimum:
         reporter.say("")
         return None
-    recommended = _paste_block(reporter, "  Recommended specs, one per line (optional)")
+    recommended = _paste_block(reporter, RECOMMENDED_PROMPT)
     _code, checklist = _run_checklist(
         machine, verdict.question, minimum, recommended, args, reporter, client
     )
@@ -846,11 +860,11 @@ def _secret_prompt(prompt: str) -> str:
 
 
 def _interactive_terminal() -> bool:
-    """True when both sides of the console are a real terminal.
+    """True when both stdin and stdout are connected terminals.
 
-    Both ends have to agree: a piped stdout belongs to redirected output even
-    when stdin is a terminal, and asking setup questions into a script's
-    captured stdin would only hang it.
+    Both ends must be actual TTYs: a piped stdout is not a terminal even
+    if stdin is one, and redirecting stdin would cause interactive prompts
+    to hang scripts waiting for input.
     """
     return sys.stdin.isatty() and sys.stdout.isatty()
 
@@ -1086,10 +1100,11 @@ def _edit_setting(setting: Any, reporter: Reporter) -> None:
             return
         save = lambda: settings_module.save_config({setting.key: value})
     elif setting.kind == "chain":
-        reporter.say(
-            "  Providers: "
-            + "; ".join(f"{pid} = {providers_module.PROVIDER_LABELS[pid]}" for pid in providers_module.PROVIDER_IDS)
+        labels = "; ".join(
+            f"{pid} = {providers_module.PROVIDER_LABELS[pid]}"
+            for pid in providers_module.PROVIDER_IDS
         )
+        reporter.say(f"  Providers: {labels}")
         answer = _prompt("  Comma-separated, in order (Enter keeps the current value): ")
         if not answer:
             reporter.say("  Unchanged.")

@@ -333,7 +333,9 @@ CPU_RANKINGS: tuple[tuple[str, float], ...] = (
     # Intel Core Ultra 200 series, Arrow Lake (2024)
     ("Core Ultra 7 270K Plus", 97.0),
     ("Core Ultra 5 250K Plus", 94.0),
-    ("Core Ultra 7 270K", 94.0),    ("Core Ultra 9 285K", 94.0),    ("Core Ultra 7 265K", 89.0),
+    ("Core Ultra 7 270K", 94.0),
+    ("Core Ultra 9 285K", 94.0),
+    ("Core Ultra 7 265K", 89.0),
     ("Core Ultra 5 250K", 91.0),
     ("Core Ultra 5 225", 84.0),
     ("Core Ultra 5 245K", 86.0),

@@ -14,7 +14,6 @@ These are regression tests for real bugs, not coverage for its own sake:
 Run:  python -m unittest discover -s tests
 """
 
-import os
 import types
 import unittest
 from unittest import mock

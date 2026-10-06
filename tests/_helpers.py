@@ -96,7 +96,7 @@ class FakeClient:
         self.calls: list[dict[str, Any]] = []
 
     def ask(self, state: Any, questions: dict[str, Any]) -> Any:
-        from system_one import Decision, SystemOneError
+        from system_one import Decision
 
         if self.error is not None:
             raise self.error
