@@ -90,6 +90,29 @@ class ValidationTests(TempDir):
         with self.assertRaises(ConfigError):
             self._load({"verdict_bands": {"yes_at": 1.4}})
 
+    def test_a_non_integer_floor_is_refused(self) -> None:
+        # Without this check, "twenty" only blows up with a
+        # traceback the first time the property is read.
+        with self.assertRaises(ConfigError):
+            self._load({"min_reportable_confidence": "twenty"})
+
+    def test_a_floor_below_zero_is_refused(self) -> None:
+        # -5 would make the flag always false.
+        with self.assertRaises(ConfigError):
+            self._load({"min_reportable_confidence": -5})
+
+    def test_a_floor_above_hundred_is_refused(self) -> None:
+        # 500 would flag every verdict.
+        with self.assertRaises(ConfigError):
+            self._load({"min_reportable_confidence": 500})
+
+    def test_the_default_floor_is_acceptable(self) -> None:
+        self.assertEqual(self._load({}).min_reportable_confidence, 20)
+
+    def test_a_floor_inside_the_scale_is_acceptable(self) -> None:
+        config = self._load({"min_reportable_confidence": 50})
+        self.assertEqual(config.min_reportable_confidence, 50)
+
     def test_a_missing_file_is_a_loud_error(self) -> None:
         with self.assertRaises(ConfigError):
             config_module.load(Path("nope-does-not-exist.json"))

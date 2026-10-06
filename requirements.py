@@ -8,9 +8,12 @@ then do is check it, each requirement in the role that fits:
 
 * a numeric requirement ("8 GB RAM") is compared against the measured machine
   directly -- deterministic, offline, no model call;
-* a named part ("GTX 970 or better") is a judgment, so it becomes one atomic
-  noul question for the provider, gated by the usual coin-flip rule. A coin
-  flip counts as *unknown*, never as a pass or a fail.
+* a named part ("GTX 970 or better") is checked against the curated
+  capability tables first: when both the required part and the machine's
+  best part have a score, the comparison is arithmetic and offline. Only
+  when either side is unknown does it become one atomic noul question for
+  the provider, gated by the usual coin-flip rule. A coin flip counts as
+  *unknown*, never as a pass or a fail.
 
 Anything that parses to neither is reported as unchecked. Nothing is guessed.
 """
@@ -18,9 +21,10 @@ Anything that parses to neither is reported as unchecked. Nothing is guessed.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Mapping
 
+import rankings
 from system_one import SystemOneClient, SystemOneError
 
 #: How many atomic questions go into one provider call. The local endpoint
@@ -74,14 +78,6 @@ class Requirement:
 
 
 @dataclass(frozen=True)
-class ParsedRequirements:
-    minimum: list[Requirement] = field(default_factory=list)
-    recommended: list[Requirement] = field(default_factory=list)
-    unchecked: list[str] = field(default_factory=list)
-    ignored: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
 class CheckItem:
     """One requirement's outcome, with the working shown."""
 
@@ -93,6 +89,7 @@ class CheckItem:
     unit: str = ""
     probability: float | None = None  # model-judged items only
     detail: str = ""
+    path: str = ""  # "tier-table" | "model" | "" (numeric checks)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -104,6 +101,7 @@ class CheckItem:
             "unit": self.unit,
             "probability": self.probability,
             "detail": self.detail,
+            "path": self.path,
         }
 
 
@@ -118,12 +116,14 @@ class CheckResult:
     unchecked: list[str]
     notes: list[str]
     model_unavailable: bool = False
+    low_confidence: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "task": self.task,
             "verdict": self.verdict,
             "confidence": self.confidence,
+            "low_confidence": self.low_confidence,
             "items": [i.to_dict() for i in self.items],
             "unchecked": list(self.unchecked),
             "notes": list(self.notes),
@@ -221,6 +221,33 @@ def _machine_values(state: Mapping[str, Any]) -> dict[str, float | None]:
     }
 
 
+def _capability_values(state: Mapping[str, Any]) -> dict[str, tuple[str, float] | None]:
+    """The machine's best GPU and CPU, with their curated capability scores.
+
+    The scores ride in the state (``capability_score``), filled by
+    detection, so what a tier comparison sees is exactly what the model
+    would have seen. A state without the key -- a hand-built payload --
+    has no known tier, and the named-part check falls back to the model
+    rather than inventing one.
+    """
+    def best(entries: Any) -> tuple[str, float] | None:
+        scored = [
+            (str(entry.get("name")), float(entry.get("capability_score")))
+            for entry in (entries or [])
+            if isinstance(entry, Mapping)
+            and not isinstance(entry.get("capability_score"), bool)
+            and isinstance(entry.get("capability_score"), (int, float))
+        ]
+        return max(scored, key=lambda entry: entry[1]) if scored else None
+
+    cpu = state.get("cpu") if isinstance(state.get("cpu"), Mapping) else {}
+    cpu_score = cpu.get("capability_score")
+    cpu_best = None
+    if not isinstance(cpu_score, bool) and isinstance(cpu_score, (int, float)):
+        cpu_best = (str(cpu.get("name")), float(cpu_score))
+    return {"gpu_model": best(state.get("gpus")), "cpu_model": cpu_best}
+
+
 def check_requirements(
     state: Mapping[str, Any],
     task: str,
@@ -233,8 +260,12 @@ def check_requirements(
     """Check pasted requirements against the machine and compose the verdict.
 
     Numeric requirements never touch the model. Named-part requirements
-    become atomic noul questions; a coin flip or a dead endpoint leaves them
-    unknown, which can soften the verdict but never flips it. ``progress``,
+    are settled by the curated capability tables when both sides are
+    known -- a deterministic comparison, offline. Only a named part the
+    tables cannot place (an unknown required part, or a machine whose
+    state carries no capability score) becomes an atomic noul question,
+    and a coin flip or a dead endpoint leaves it unknown, which can
+    soften the verdict but never flips it. ``progress``,
     when given, is called once right before the model is asked, so the UI can
     explain the wait.
     """
@@ -247,6 +278,7 @@ def check_requirements(
         )
 
     machine = _machine_values(state)
+    capabilities = _capability_values(state)
     items: list[CheckItem] = []
     notes: list[str] = []
 
@@ -254,6 +286,11 @@ def check_requirements(
         for requirement in requirements:
             if requirement.component in _NUMERIC:
                 items.append(_check_numeric(requirement, tier, machine))
+                continue
+            # Named part: the tier table answers when it can.
+            deterministic = _check_named_tier(requirement, tier, capabilities, config)
+            if deterministic is not None:
+                items.append(deterministic)
             else:
                 items.append(CheckItem(
                     tier=tier, component=requirement.component, raw=requirement.raw,
@@ -262,20 +299,64 @@ def check_requirements(
                     else "no model was available to judge it",
                 ))
 
+    # Only the named parts the tables could not settle go to the model,
+    # so a checklist of known parts never spends a model call.
     model_indexes = [
-        i for i, item in enumerate(items) if item.component in ("gpu_model", "cpu_model")
+        i for i, item in enumerate(items)
+        if item.component in ("gpu_model", "cpu_model")
+        and item.path != "tier-table"
     ]
     model_unavailable = False
     if model_indexes and client is not None:
         if progress is not None:
             progress()
-        _judge_named(items, model_indexes, state, client, config, notes)
+        every_batch_failed = _judge_named(items, model_indexes, state, client, config, notes)
+        if every_batch_failed:
+            # The client exists but no endpoint answered, which is the
+            # same outage as no client at all: the named parts are
+            # unknown and the user must be told why.
+            model_unavailable = True
+            notes.append("no System One endpoint answered, so the named parts could not be judged")
     elif model_indexes:
         model_unavailable = True
         notes.append("no System One endpoint answered, so the named parts could not be judged")
 
     return _compose(task, items, notes, unchecked_min + unchecked_rec,
-                    ignored_min + ignored_rec, model_unavailable)
+                    ignored_min + ignored_rec, model_unavailable, config)
+
+
+def _check_named_tier(
+    requirement: Requirement, tier: str,
+    capabilities: dict[str, tuple[str, float] | None], config: Any,
+) -> CheckItem | None:
+    """The deterministic tier comparison for a named part, if possible.
+
+    Both sides must be known: the required part must have a score in
+    the curated table, and the machine's state must carry a capability
+    score for its best GPU (or CPU). When either is missing, ``None``
+    comes back and the caller falls back to the model -- an unknown
+    tier is a gap in the evidence, not a zero.
+    """
+    lookup = rankings.gpu_entry if requirement.component == "gpu_model" else rankings.cpu_entry
+    required = lookup(requirement.raw, config)
+    if required is None:
+        return None
+    machine = capabilities.get(requirement.component)
+    if machine is None:
+        return None
+    required_name, required_score = required
+    machine_name, machine_score = machine
+    passed = machine_score + 1e-9 >= required_score
+    return CheckItem(
+        tier=tier, component=requirement.component, raw=requirement.raw,
+        state="passed" if passed else "failed", path="tier-table",
+        detail=(
+            f"{required_name} ~ {required_score:g}/100 vs this machine's "
+            f"{machine_name} ~ {machine_score:g}/100 "
+            f"(curated tier table v"
+            f"{getattr(config, 'rankings_version', rankings.RANKINGS_VERSION)})"
+        ),
+    )
 
 
 def _check_numeric(requirement: Requirement, tier: str,
@@ -298,9 +379,19 @@ def _check_numeric(requirement: Requirement, tier: str,
 
 
 def _judge_named(items: list[CheckItem], indexes: list[int], state: Mapping[str, Any],
-                 client: SystemOneClient, config: Any, notes: list[str]) -> None:
-    """Ask the provider one atomic noul per named part, in small batches."""
+                 client: SystemOneClient, config: Any, notes: list[str]) -> bool:
+    """Ask the provider one atomic noul per named part, in small batches.
+
+    Every item this settles is marked ``path="model"`` so a reader can
+    tell a model judgment from a tier-table one at a glance.
+
+    Returns True when *every* batch failed, meaning no System One
+    endpoint answered at all. Partial success (some batches answered)
+    returns False: the items those batches covered carry real answers,
+    so the model was available even though other items stayed unknown.
+    """
     margin = getattr(config, "uncertain_margin", 0.10)
+    all_failed = True
     for start in range(0, len(indexes), QUESTIONS_PER_CALL):
         batch = indexes[start:start + QUESTIONS_PER_CALL]
         questions = {
@@ -317,12 +408,13 @@ def _judge_named(items: list[CheckItem], indexes: list[int], state: Mapping[str,
             for index in batch:
                 items[index] = _unknown_item(items[index], "no model answer")
             continue
+        all_failed = False
         for index in batch:
             probability = decision.noul(f"req_{index}")
             if abs(probability - 0.5) < margin:
                 items[index] = CheckItem(
                     tier=items[index].tier, component=items[index].component,
-                    raw=items[index].raw, state="unknown",
+                    raw=items[index].raw, state="unknown", path="model",
                     probability=probability,
                     detail=f"the model was close to a coin flip (P={probability:.2f})",
                 )
@@ -330,11 +422,12 @@ def _judge_named(items: list[CheckItem], indexes: list[int], state: Mapping[str,
                 passed = probability >= 0.5
                 items[index] = CheckItem(
                     tier=items[index].tier, component=items[index].component,
-                    raw=items[index].raw,
+                    raw=items[index].raw, path="model",
                     state="passed" if passed else "failed",
                     probability=probability,
                     detail=f"the model judged this with P={probability:.2f}",
                 )
+    return all_failed
 
 
 def _named_question(item: CheckItem) -> str:
@@ -349,12 +442,32 @@ def _unknown_item(item: CheckItem, reason: str) -> CheckItem:
     return CheckItem(
         tier=item.tier, component=item.component, raw=item.raw, state="unknown",
         required=item.required, unit=item.unit, probability=item.probability,
-        detail=reason,
+        detail=reason, path=item.path,
     )
 
 
+def _item_confidence(item: CheckItem) -> float | None:
+    """How confident one outcome is, as 0-100, or ``None``.
+
+    A passed or failed item is as confident as its
+    probability backs the verdict. An unknown item carries
+    a probability only when the model was unsure (a coin
+    flip), so it can never be more than ``min(p, 1-p)``
+    -- 50 at best.
+    """
+    if item.probability is None:
+        return None
+    probability = item.probability
+    if item.state == "passed":
+        return probability * 100.0
+    if item.state == "failed":
+        return (1.0 - probability) * 100.0
+    return min(probability, 1.0 - probability) * 100.0
+
+
 def _compose(task: str, items: list[CheckItem], notes: list[str], unchecked: list[str],
-             ignored: list[str], model_unavailable: bool) -> CheckResult:
+             ignored: list[str], model_unavailable: bool,
+             config: Any = None) -> CheckResult:
     fails_min = [i for i in items if i.tier == "minimum" and i.state == "failed"]
     fails_rec = [i for i in items if i.tier == "recommended" and i.state == "failed"]
     passes_min = [i for i in items if i.tier == "minimum" and i.state == "passed"]
@@ -374,10 +487,29 @@ def _compose(task: str, items: list[CheckItem], notes: list[str], unchecked: lis
         verdict = "Cannot tell"
 
     model_confidences = [
-        (i.probability if i.state == "passed" else 1.0 - i.probability) * 100.0
-        for i in items if i.probability is not None and i.state in ("passed", "failed")
+        confidence
+        for confidence in (_item_confidence(item) for item in items)
+        if confidence is not None
     ]
-    confidence = int(round(min(model_confidences))) if model_confidences else 100
+    if model_confidences:
+        confidence = int(round(min(model_confidences)))
+    elif any(item.state == "unknown" for item in items) or model_unavailable:
+        # Nothing was judged: an all-unknown checklist (a
+        # full model outage) must not inherit the
+        # deterministic score.
+        confidence = 0
+    else:
+        # A purely deterministic checklist: every item was
+        # settled without a model, so nothing was guessed.
+        confidence = 100
+
+    # The reportable floor labels, it does not hide: a checklist
+    # below the floor keeps its verdict and its number, but the
+    # user is told to treat it as a guess instead of a plain,
+    # confident-looking answer. getattr, so a config object that
+    # predates the setting still composes.
+    floor = getattr(config, "min_reportable_confidence", 20)
+    low_confidence = confidence < floor
 
     notes = list(notes)
     if unchecked:
@@ -386,9 +518,14 @@ def _compose(task: str, items: list[CheckItem], notes: list[str], unchecked: lis
     if ignored:
         notes.append(f"{len(ignored)} line(s) were platform or peripheral notes, "
                      "not hardware requirements")
+    if low_confidence:
+        notes.append(
+            f"confidence is below the reportable floor "
+            f"({floor}%); treat this verdict as a guess"
+        )
 
     return CheckResult(
-        task=task, verdict=verdict, confidence=max(0, min(100, confidence)),
+        task=task, verdict=verdict, confidence=confidence,
         items=items, unchecked=list(unchecked), notes=notes,
-        model_unavailable=model_unavailable,
+        model_unavailable=model_unavailable, low_confidence=low_confidence,
     )

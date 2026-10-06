@@ -67,6 +67,7 @@ inventory.py ──detect──▶ main.py ──ask──▶ system_one.py
 |---|---|
 | `main.py` | Commands, interactive loop, JSON output, exit codes |
 | `inventory.py` | Hardware only: CPU, RAM, GPU/VRAM, disks, OS |
+| `rankings.py` | Curated GPU/CPU capability tables, matching, tier labels |
 | `system_one.py` | Request validation, HTTP failover, typed answers |
 | `judgment.py` | Facts plus model answers, as a 0–100 rating |
 | `providers.py` | Endpoint catalog, chain, Ollama and OpenRouter discovery |
@@ -135,7 +136,7 @@ Before a model call the app prints who is being asked and the timeout. Repeats p
 
 # Requirement checks
 
-Numeric lines such as `8 GB RAM` are compared with measured specs. No model call. Named parts such as `GTX 970` become one yes/no question. An unsure model counts as unknown. Unparsed text is not checked.
+Numeric lines such as `8 GB RAM` are compared with measured specs. No model call. Named parts such as `GTX 970` are settled by the curated capability tables when both sides are known (`rankings.py`); only an unknown part or unknown machine becomes one yes/no question. An unsure model counts as unknown. Unparsed text is not checked.
 
 Verdicts name the requirement and both numbers: meets recommended, meets minimum, or below minimum.
 
@@ -145,6 +146,16 @@ python main.py check "a game" --min-reqs "8 GB RAM" --rec-reqs "16 GB RAM"
 ```
 
 In `--json` mode, an unsure ask can return `"requirements_needed": true` instead of blocking on a prompt.
+
+---
+
+# Rankings overrides
+
+The curated GPU/CPU capability tables (`rankings.py`) can be replaced through the config file pointed at by `--config` (or the `SYSTEM_ANALYZER_CONFIG` environment variable) — not `settings.py`'s `config.json`, which rejects unknown keys. Three keys are accepted: `gpu_rankings` and `cpu_rankings` (each the whole table, as a list of `[pattern, score]` pairs) and `rankings_version` (the version string the ordering is dated with). An override REPLACES the whole table: any part absent from it loses its `capability_score`, stays `unknown`, and its requirement checks fall back to the model. Scores must sit between 0 and 100; a malformed override is rejected loudly at startup.
+
+```json
+{"gpu_rankings": [["My GPU", 50.0]], "rankings_version": "2026-11"}
+```
 
 ---
 

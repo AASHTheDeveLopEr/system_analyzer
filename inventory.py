@@ -23,7 +23,6 @@ this moment, not the machine, so they stay out of the state sent to the model.
 from __future__ import annotations
 
 import contextlib
-import os
 import platform
 from dataclasses import dataclass
 from typing import Any
@@ -31,6 +30,8 @@ from typing import Any
 import cpuinfo
 import psutil
 import pynvml
+
+import rankings
 
 GIB = 1024 ** 3
 MIB = 1024 ** 2
@@ -95,22 +96,39 @@ class Gpu:
     Prefer ``nvml`` cards when a judgment needs the strongest adapter;
     ``platform``-only entries are usually integrated graphics, but nothing
     here claims that, because nothing here can see it.
+
+    ``capability`` is the card's place in the curated relative-capability
+    table (``rankings.GPU_RANKINGS``), from ``0.0`` to ``100.0``, or
+    ``None`` when the name matched no entry. It is *not* a benchmark: it is
+    the grounding that lets a model compare "RTX 3050" against "GTX 970 or
+    better" across generations, and it lets the requirement checks settle
+    that question without asking the model at all.
     """
 
     name: str
     vram_bytes: int | None = None
     source: str = "unknown"
     note: str = ""
+    capability: float | None = None
 
     def display(self) -> str:
         if self.vram_bytes is not None:
-            return f"{self.name} ({_format_size(self.vram_bytes)} VRAM)"
-        return f"{self.name} (VRAM {UNKNOWN}{f': {self.note}' if self.note else ''})"
+            text = f"{self.name} ({_format_size(self.vram_bytes)} VRAM"
+        else:
+            text = (
+                f"{self.name} (VRAM {UNKNOWN}"
+                f"{f': {self.note}' if self.note else ''}"
+            )
+        # The tier rides inside the parens with the VRAM: an unknown
+        # tier stays "unknown", exactly like an unreadable VRAM figure,
+        # so a missing ranking is visible and never guessed.
+        return f"{text}, {rankings.tier_text(self.capability)})"
 
     def to_state(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "dedicated_vram_gib": _gib(self.vram_bytes),
+            "capability_score": self.capability,
             "detected_via": self.source,
             "note": self.note or None,
         }
@@ -151,12 +169,18 @@ class Inventory:
     gpus: tuple[Gpu, ...] = ()
     disks: tuple[Disk, ...] = ()
     python_version: str = UNKNOWN
+    cpu_capability: float | None = None
 
     def lines(self) -> list[tuple[str, str]]:
         """The "label: value" rows the menu prints."""
         cpu = self.cpu_name
         if self.cpu_ghz and not any(unit in cpu for unit in ("GHz", "MHz")):
             cpu = f"{cpu} @ {self.cpu_ghz:.1f} GHz"
+        if cpu != UNKNOWN:
+            # The capability tier rides with the name, like it does
+            # with a GPU's VRAM; a fully unknown CPU stays just
+            # "unknown" rather than "unknown (unknown)".
+            cpu = f"{cpu} ({rankings.tier_text(self.cpu_capability)})"
         gpus = ", ".join(gpu.display() for gpu in self.gpus) if self.gpus else UNKNOWN
         disks = ", ".join(disk.display() for disk in self.disks) if self.disks else UNKNOWN
         # The CPU's live reading rides with its core count: "23% busy" needs
@@ -189,6 +213,7 @@ class Inventory:
                 "name": self.cpu_name,
                 "logical_cores": self.cpu_cores,
                 "clock_ghz": round(self.cpu_ghz, 2) if self.cpu_ghz else None,
+                "capability_score": self.cpu_capability,
             },
             "memory": {
                 "total_gib": _gib(self.memory.total_bytes),
@@ -324,23 +349,36 @@ def _is_software_adapter(name: str) -> bool:
     return any(marker in lowered for marker in SOFTWARE_ADAPTERS)
 
 
-def detect_gpus() -> tuple[Gpu, ...]:
+def detect_gpus(config: Any = None) -> tuple[Gpu, ...]:
     """Every real GPU on this machine, across NVIDIA and the host platform.
 
     pynvml reads NVIDIA cards on any OS and reports VRAM most reliably, so it
     goes first and its entries are preferred. ``gpu-detector`` then fills the
     gap for AMD, Intel, and other vendors on Linux, Windows (WMI), and macOS
     (system_profiler). Software and virtual adapters are filtered out.
+
+    Each card's relative capability is looked up in the curated rankings
+    (``rankings.GPU_RANKINGS``, or the config's override), so the state
+    carries a tier the model can compare against. A name the table does
+    not know stays ``None`` -- unknown, never zero.
     """
-    cards = _nvidia_gpus()
+    cards = _nvidia_gpus(config)
     known = [_normalize(gpu.name) for gpu in cards]
     for name, vram_bytes, source, note in _platform_gpu_results():
         if _is_software_adapter(name):
             continue
         normalized = _normalize(name)
-        if any(normalized in seen or seen in normalized for seen in known):
-            continue  # pynvml already reported this one, spelled differently
-        cards.append(Gpu(name=name, vram_bytes=vram_bytes, source=source, note=note))
+        # Substring matching is unsafe here: distinct Intel generations
+        # share a name prefix ("Intel UHD Graphics" and "Intel UHD
+        # Graphics 630" are different cards), so a substring test would
+        # silently drop a real adapter. Only an exact normalized-name
+        # match means pynvml already reported this card, spelled differently.
+        if normalized in known:
+            continue
+        cards.append(Gpu(
+            name=name, vram_bytes=vram_bytes, source=source, note=note,
+            capability=rankings.gpu_score(name, config),
+        ))
         known.append(normalized)
     return tuple(cards)
 
@@ -394,12 +432,23 @@ def _detect_platform_gpus() -> list:
 
 
 def _normalize(name: str) -> str:
-    """Fold the vendor prefix and spacing so the same card matches itself."""
-    lowered = name.lower().replace("nvidia", "").replace("(r)", "").replace("(tm)", "")
+    """Fold vendor prefixes, branding words and spacing so the same
+    card matches itself across sources.
+
+    Sources disagree about the vendor prefix: WMI reports "Intel UHD
+    Graphics 770" where gpu-detector reports "UHD Graphics 770".
+    Stripping the brand markers makes those one card, and case is
+    folded the same way, so "NVIDIA" and "nvidia" match too. Only
+    an exact normalized match counts: distinct generations ("UHD
+    Graphics" and "UHD Graphics 630") stay apart.
+    """
+    lowered = name.lower()
+    for marker in ("nvidia", "intel", "amd", "radeon", "geforce", "(r)", "(tm)", "graphics"):
+        lowered = lowered.replace(marker, "")
     return " ".join("".join(ch if ch.isalnum() or ch.isspace() else " " for ch in lowered).split())
 
 
-def _nvidia_gpus() -> list[Gpu]:
+def _nvidia_gpus(config: Any = None) -> list[Gpu]:
     """(name, vram) for each NVIDIA card; empty if there is none or no driver.
 
     pynvml reads NVIDIA cards on any OS and is the only source that reports
@@ -429,6 +478,7 @@ def _nvidia_gpus() -> list[Gpu]:
                     vram_bytes=vram,
                     source="nvml",
                     note="" if vram is not None else "driver did not report VRAM",
+                    capability=rankings.gpu_score(name, config),
                 )
             )
         return cards
@@ -439,8 +489,13 @@ def _nvidia_gpus() -> list[Gpu]:
             pynvml.nvmlShutdown()
 
 
-def detect_inventory() -> Inventory:
-    """Detect this machine. Nothing here raises; anything missing stays None."""
+def detect_inventory(config: Any = None) -> Inventory:
+    """Detect this machine. Nothing here raises; anything missing stays None.
+
+    ``config``, when given, selects the capability tables in force
+    (``rankings`` overrides); the CPU's relative capability is looked
+    up alongside its name so the state carries it.
+    """
     cpu_name, cores, ghz = detect_cpu()
     return Inventory(
         os_name=detect_os(),
@@ -449,9 +504,10 @@ def detect_inventory() -> Inventory:
         cpu_ghz=ghz,
         cpu_usage_percent=detect_cpu_usage(),
         memory=detect_memory(),
-        gpus=detect_gpus(),
+        gpus=detect_gpus(config),
         disks=detect_disks(),
         python_version=platform.python_version(),
+        cpu_capability=rankings.cpu_score(cpu_name, config),
     )
 
 

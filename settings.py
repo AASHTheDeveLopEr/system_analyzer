@@ -142,8 +142,16 @@ _CHAIN_IDS = ("ollama", "zen", "typesafe", "openrouter")
 _KEY_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
-class SettingsError(ValueError):
-    """A settings file says something that cannot be used."""
+class SettingsError(Exception):
+    """A settings file says something that cannot be used.
+
+    Deliberately not a ``ValueError``: the interactive ask block
+    catches ``ValueError`` to keep a bad answer from ending the
+    session, and that catch must never be able to swallow a settings
+    failure. The app's promise for a broken config.json is exit 2,
+    not a soft printed line, so the class hierarchy has to keep the
+    two apart structurally.
+    """
 
 
 class Settings:
@@ -233,7 +241,15 @@ def load_settings(base: str | os.PathLike[str] | None = None) -> Settings:
             values[setting.key] = (setting.default, "default")
 
     settings = Settings(values, warnings)
-    settings.chain()  # fail fast on an unknown provider id
+    try:
+        settings.chain()  # fail fast on an unknown provider id
+    except SettingsError as error:
+        # The chain can come from the environment, .env or
+        # config.json; name which, so the one failing line says
+        # what to fix.
+        raise SettingsError(
+            f"{settings.origin('provider_chain')}: {error}"
+        ) from error
     return settings
 
 

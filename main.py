@@ -21,7 +21,7 @@ codes that mean something::
 
     0  worked
     1  something went wrong
-    2  bad command line
+    2  bad command line, or a config.json that cannot be used
     3  no System One endpoint answered -- degraded, output is still valid
     4  the question could not be grounded in your hardware -- no verdict given
 
@@ -105,9 +105,14 @@ def _provenance(decision_or_rating: Any) -> str:
 # --------------------------------------------------------------------------
 
 
-def _detect() -> Any:
-    """This machine's hardware inventory."""
-    return inventory.detect_inventory()
+def _detect(config: Any = None) -> Any:
+    """This machine's hardware inventory.
+
+    ``config`` selects the capability tables in force, so the
+    rankings carried by the inventory match the ones the rest of
+    the run uses.
+    """
+    return inventory.detect_inventory(config)
 
 
 def _client() -> SystemOneClient:
@@ -145,7 +150,7 @@ def _elapsed_text(seconds: float) -> str:
 
 
 def cmd_specs(args: argparse.Namespace, reporter: Reporter, detected: Any = None) -> int:
-    machine = detected or _detect()
+    machine = detected or _detect(args.config_object)
 
     if args.json:
         reporter.data({"inventory": machine.to_state(), "labels": dict(machine.lines())})
@@ -169,19 +174,28 @@ def cmd_specs(args: argparse.Namespace, reporter: Reporter, detected: Any = None
 
 def cmd_payload(args: argparse.Namespace, reporter: Reporter) -> int:
     """Show exactly what would be sent to a System One endpoint."""
-    state = _detect().to_state()
+    state = _detect(args.config_object).to_state()
     endpoints, skipped = providers_module.chain()
     reporter.data(
         {
             "state": state,
-            "providers": [
-                {"name": p["name"], "url": p["url"], "model": p["model"], "source": p["source"]}
-                for p in endpoints
-            ],
+            "providers": _endpoint_summaries(endpoints),
             "skipped": skipped,
         }
     )
     return EXIT_OK
+
+
+def _endpoint_summaries(endpoints: list[dict]) -> list[dict[str, Any]]:
+    """The printable fields of each endpoint, without anything secret.
+
+    The provider dicts carry the Authorization header, so only these four
+    fields are ever copied into a document that gets printed.
+    """
+    return [
+        {"name": p["name"], "url": p["url"], "model": p["model"], "source": p["source"]}
+        for p in endpoints
+    ]
 
 
 def cmd_config(args: argparse.Namespace, reporter: Reporter) -> int:
@@ -201,10 +215,7 @@ def _providers_document() -> dict[str, Any]:
     document = settings.to_dict()
     endpoints, skipped = providers_module.chain()
     document["chain"] = {
-        "endpoints": [
-            {"name": p["name"], "url": p["url"], "model": p["model"], "source": p["source"]}
-            for p in endpoints
-        ],
+        "endpoints": _endpoint_summaries(endpoints),
         "skipped": skipped,
     }
     return document
@@ -232,7 +243,7 @@ def _print_rating(rating: Any, reporter: Reporter) -> None:
 def cmd_rate(
     args: argparse.Namespace, reporter: Reporter, detected: Any = None, client: Any = None
 ) -> int:
-    machine = detected or _detect()
+    machine = detected or _detect(args.config_object)
     client = client or _client()
     repeat = getattr(args, "repeat", 1)
 
@@ -290,7 +301,12 @@ def _rate_repeated(
         reporter.say(f"  tiers seen : {', '.join(sorted(b for b in bands if b)) or 'unknown'}")
         reporter.say(f"  stable     : {'yes' if stable else 'no'} (tolerance {tolerance})")
         reporter.say("")
-    return EXIT_OK
+    # A degraded rating is not "answered": the single-run path exits 3
+    # when the method fell back to rules. A repeated run counts as
+    # degraded when *any* run fell back -- a run that reached a model
+    # first and then lost it is still a degraded answer, not a clean
+    # one, so the exit code must say so.
+    return EXIT_NO_MODEL if any(r.method == "rules" for r in results) else EXIT_OK
 
 
 def _print_verdict(verdict: Any, reporter: Reporter) -> None:
@@ -360,7 +376,7 @@ def cmd_ask(
     if getattr(args, "check", False):
         return cmd_check(args, reporter, detected=detected, client=client)
 
-    machine = detected or _detect()
+    machine = detected or _detect(args.config_object)
     client = client or _client()
     history = History(args.history_file, reporter)
 
@@ -370,8 +386,14 @@ def cmd_ask(
             return _ask_repeated(machine, args.question, client, repeat, args, history, reporter)
 
         _verdict, code = _ask_once(machine, args.question, client, args, history, reporter)
-        if code == EXIT_OK:
-            _offer_requirements(machine, _verdict, args, reporter, client)
+        # Offered unconditionally: the checklist is for the verdicts that
+        # most need it (coin-flip or ungrounded), and _offer_requirements
+        # no-ops for grounded verdicts, --json, and non-interactive runs.
+        checklist = _offer_requirements(machine, _verdict, args, reporter, client)
+        if _settled_by_checklist(checklist):
+            # The pasted requirements answered the question, so the
+            # checklist's grounded verdict decides the exit code.
+            code = EXIT_OK
         return code
     except SystemOneError as error:
         reporter.note(f"no System One endpoint answered: {error}")
@@ -441,7 +463,10 @@ def _ask_repeated(
         _print_verdict(verdicts[0], reporter)
         reporter.say("")
         reporter.say(f"  {repeat} runs: {', '.join(bands)}")
-        reporter.say(f"  confidence : {min(confidences)}-{max(confidences)}% (spread {spread}, tolerance {tolerance})")
+        reporter.say(
+            f"  confidence : {min(confidences)}-{max(confidences)}% "
+            f"(spread {spread}, tolerance {tolerance})"
+        )
         reporter.say(f"  stable     : {'yes' if stable else 'no'}")
         reporter.say("")
     return EXIT_OK
@@ -496,10 +521,10 @@ def cmd_interactive(args: argparse.Namespace, reporter: Reporter) -> int:
 
         if menu_mode and line in _MENU_CHOICES:
             if line == "1":
-                machine = machine or _detect()
+                machine = machine or _detect(args.config_object)
                 cmd_specs(args, reporter, detected=machine)
             elif line == "2":
-                machine = machine or _detect()
+                machine = machine or _detect(args.config_object)
                 client = client or _client()
                 cmd_rate(args, reporter, detected=machine, client=client)
             elif line == "3":
@@ -508,7 +533,7 @@ def cmd_interactive(args: argparse.Namespace, reporter: Reporter) -> int:
                 except (EOFError, KeyboardInterrupt):
                     break
                 if question:
-                    machine = machine or _detect()
+                    machine = machine or _detect(args.config_object)
                     client = client or _client()
                     if question.lower() == "check" or question.lower().startswith("check "):
                         # Requirements already in hand: straight to the checklist,
@@ -534,7 +559,7 @@ def cmd_interactive(args: argparse.Namespace, reporter: Reporter) -> int:
             continue
 
         if lowered == "check" or lowered.startswith("check "):
-            machine = machine or _detect()
+            machine = machine or _detect(args.config_object)
             client = client or _client()
             _interactive_check(
                 args, reporter, task=line[6:].strip() or None, detected=machine, client=client
@@ -543,7 +568,7 @@ def cmd_interactive(args: argparse.Namespace, reporter: Reporter) -> int:
 
         # Anything else is the question itself, so "can I game?" works without
         # going through the menu.
-        machine = machine or _detect()
+        machine = machine or _detect(args.config_object)
         client = client or _client()
         _ask_in_session(args, reporter, history, line, machine, client)
 
@@ -559,17 +584,32 @@ def _ask_in_session(
     question: str,
     machine: Any,
     client: Any,
-) -> None:
-    """One question inside the interactive loop: answer, then offer the checklist."""
+) -> int:
+    """One question inside the interactive loop: answer, then offer the checklist.
+
+    Returns the question's exit code: a grounded checklist that
+    settles the question counts as answered, everything else
+    keeps the verdict's own code.
+    """
     try:
-        _verdict, _code = _ask_once(machine, question, client, args, history, reporter)
+        _verdict, code = _ask_once(machine, question, client, args, history, reporter)
         if not args.json:
-            _offer_requirements(machine, _verdict, args, reporter, client)
+            checklist = _offer_requirements(machine, _verdict, args, reporter, client)
+            if _settled_by_checklist(checklist):
+                code = EXIT_OK
+        return code
     except SystemOneError as error:
         reporter.note(f"no System One endpoint answered: {error}")
         reporter.say("  No verdict this time -- the endpoint did not answer.")
+        return EXIT_NO_MODEL
     except ValueError as error:
+        # A bad answer from the model layer (an empty question, for
+        # one) is soft: the session continues. SettingsError is
+        # deliberately not a ValueError (see settings.py), so a
+        # broken config.json escapes this catch and reaches
+        # main()'s exit-2 wrapper instead of being printed here.
         reporter.say(f"  {error}")
+        return EXIT_ERROR
 
 
 def _print_banner(reporter: Reporter) -> None:
@@ -604,28 +644,39 @@ def _print_menu(reporter: Reporter) -> None:
 # Requirement checklists (the ask-back)
 # --------------------------------------------------------------------------
 
+#: Pasted into by every checklist entry point, so the wording cannot drift
+#: between ``check``, the session's ``check`` line and the ask-back offer.
+MINIMUM_PROMPT = "  Paste the MINIMUM requirements, one per line"
+RECOMMENDED_PROMPT = "  Recommended specs, one per line (optional)"
+
 
 def cmd_check(
     args: argparse.Namespace, reporter: Reporter, detected: Any = None, client: Any = None
 ) -> int:
     """Check pasted requirements ("8 GB RAM; GTX 970") against this machine.
 
-    Numeric requirements are compared directly against the measured specs;
-    named parts ("GTX 970") go to the provider as atomic questions.
+    Numeric requirements are compared directly against the measured
+    specs; named parts ("GTX 970") are settled by the curated
+    capability tables when both sides are known, and only an
+    unknown part or machine goes to the provider as an atomic
+    question.
     """
-    machine = detected or _detect()
+    machine = detected or _detect(args.config_object)
     task = args.question or "your task"
     minimum_text = getattr(args, "min_reqs", None)
     recommended_text = getattr(args, "rec_reqs", None)
     if not minimum_text and not args.json and _interactive_terminal():
-        minimum_text = _paste_block(reporter, "  Paste the MINIMUM requirements, one per line")
-        recommended_text = _paste_block(reporter, "  Recommended specs, one per line (optional)")
+        minimum_text = _paste_block(reporter, MINIMUM_PROMPT)
+        recommended_text = _paste_block(reporter, RECOMMENDED_PROMPT)
     if not minimum_text:
         reporter.note(
             'no requirements given; use --min-reqs "8 GB RAM; 2 GHz CPU" or run interactively'
         )
         return EXIT_USAGE
-    return _run_checklist(machine, task, minimum_text, recommended_text, args, reporter, client)
+    code, _result = _run_checklist(
+        machine, task, minimum_text, recommended_text, args, reporter, client
+    )
+    return code
 
 
 def _run_checklist(
@@ -636,7 +687,15 @@ def _run_checklist(
     args: argparse.Namespace,
     reporter: Reporter,
     client: Any = None,
-) -> int:
+) -> tuple[int, Any]:
+    """Run the checklist, report it, and hand back what it decided.
+
+    Returns the exit code plus the ``CheckResult`` the checklist
+    produced, so a caller that offered it can treat a grounded
+    verdict as the answer. The result is ``None`` when no
+    checklist could run at all: unparsable requirements, or no
+    endpoint to judge the named parts.
+    """
     client = client or _client()
     try:
         result = requirements_module.check_requirements(
@@ -646,29 +705,37 @@ def _run_checklist(
         )
     except requirements_module.RequirementError as error:
         reporter.note(f"could not check the requirements: {error}")
-        return EXIT_USAGE
+        return EXIT_USAGE, None
     except SystemOneError as error:
         reporter.note(f"no System One endpoint answered: {error}")
         if args.json:
             reporter.data({"error": "no_endpoint_answered", "detail": str(error)})
-        return EXIT_NO_MODEL
+        return EXIT_NO_MODEL, None
 
     if args.json:
         reporter.data(result.to_dict())
     else:
         _print_checklist(result, reporter)
-    if result.verdict == "Cannot tell":
-        return EXIT_UNGROUNDED
+    # A full outage leaves every named part unknown, which composes
+    # to the "Cannot tell" verdict -- but the reason nothing could be
+    # judged is that no endpoint answered, and that is what the exit
+    # code must report. Only when the model *did* answer and still
+    # could not decide is the question itself ungrounded.
     if result.model_unavailable:
-        return EXIT_NO_MODEL
-    return EXIT_OK
+        return EXIT_NO_MODEL, result
+    if result.verdict == "Cannot tell":
+        return EXIT_UNGROUNDED, result
+    return EXIT_OK, result
 
 
 def _print_checklist(result: Any, reporter: Reporter) -> None:
     reporter.say("")
     reporter.say(f"  Checklist  : {result.task}")
     reporter.say(f"  Verdict    : {result.verdict}")
-    reporter.say(f"  Confidence : {result.confidence}%")
+    confidence_line = f"  Confidence : {result.confidence}%"
+    if result.low_confidence:
+        confidence_line += "  (below the reportable floor -- a guess)"
+    reporter.say(confidence_line)
     reporter.say("")
     for item in result.items:
         if item.state in ("passed", "failed"):
@@ -699,12 +766,12 @@ def _interactive_check(
     """
     if not task:
         task = _prompt("What is it for? > ") or "your task"
-    machine = detected or _detect()
-    minimum = _paste_block(reporter, "  Paste the MINIMUM requirements, one per line")
+    machine = detected or _detect(args.config_object)
+    minimum = _paste_block(reporter, MINIMUM_PROMPT)
     if not minimum:
         reporter.say("  Nothing to check.")
         return
-    recommended = _paste_block(reporter, "  Recommended specs, one per line (optional)")
+    recommended = _paste_block(reporter, RECOMMENDED_PROMPT)
     _run_checklist(machine, task, minimum, recommended, args, reporter, client)
 
 
@@ -727,16 +794,21 @@ def _paste_block(reporter: Reporter, prompt: str) -> str:
 def _offer_requirements(
     machine: Any, verdict: Any, args: argparse.Namespace,
     reporter: Reporter, client: Any,
-) -> bool:
+) -> Any:
     """After a coin-flip or ungrounded verdict, offer the requirements checklist.
 
     Interactive only. A script that cannot answer questions is never stopped
     by one: it gets ``requirements_needed`` in its JSON instead.
+
+    Returns the ``CheckResult`` the checklist produced, so the caller
+    can let a grounded checklist settle the exit code, or ``None``
+    whenever no checklist ran: a grounded verdict, ``--json``, a
+    non-interactive run, or an empty paste.
     """
     if not (verdict.uncertain or not verdict.grounded):
-        return False
+        return None
     if args.json or not _interactive_terminal():
-        return False
+        return None
     reporter.say("")
     reporter.say("  The model could not judge that with confidence.")
     minimum = _paste_block(
@@ -744,10 +816,22 @@ def _offer_requirements(
     )
     if not minimum:
         reporter.say("")
-        return False
-    recommended = _paste_block(reporter, "  Recommended specs, one per line (optional)")
-    _run_checklist(machine, verdict.question, minimum, recommended, args, reporter, client)
-    return True
+        return None
+    recommended = _paste_block(reporter, RECOMMENDED_PROMPT)
+    _code, checklist = _run_checklist(
+        machine, verdict.question, minimum, recommended, args, reporter, client
+    )
+    return checklist
+
+
+def _settled_by_checklist(checklist: Any) -> bool:
+    """True when a checklist ran and grounded its verdict.
+
+    A checklist that ran but landed on "Cannot tell" settled
+    nothing: the question stays ungrounded and the ask's own
+    exit code stands.
+    """
+    return checklist is not None and checklist.verdict != "Cannot tell"
 
 
 # --------------------------------------------------------------------------
@@ -776,11 +860,11 @@ def _secret_prompt(prompt: str) -> str:
 
 
 def _interactive_terminal() -> bool:
-    """True when both sides of the console are a real terminal.
+    """True when both stdin and stdout are connected terminals.
 
-    Both ends have to agree: a piped stdout belongs to redirected output even
-    when stdin is a terminal, and asking setup questions into a script's
-    captured stdin would only hang it.
+    Both ends must be actual TTYs: a piped stdout is not a terminal even
+    if stdin is one, and redirecting stdin would cause interactive prompts
+    to hang scripts waiting for input.
     """
     return sys.stdin.isatty() and sys.stdout.isatty()
 
@@ -1086,10 +1170,11 @@ def _edit_setting(setting: Any, reporter: Reporter) -> None:
             return
         save = lambda: settings_module.save_config({setting.key: value})
     elif setting.kind == "chain":
-        reporter.say(
-            "  Providers: "
-            + "; ".join(f"{pid} = {providers_module.PROVIDER_LABELS[pid]}" for pid in providers_module.PROVIDER_IDS)
+        labels = "; ".join(
+            f"{pid} = {providers_module.PROVIDER_LABELS[pid]}"
+            for pid in providers_module.PROVIDER_IDS
         )
+        reporter.say(f"  Providers: {labels}")
         answer = _prompt("  Comma-separated, in order (Enter keeps the current value): ")
         if not answer:
             reporter.say("  Unchanged.")
@@ -1236,6 +1321,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"config error: {error}", file=sys.stderr)
         return EXIT_USAGE
 
+    # Settings are validated here, at launch: a config.json that
+    # cannot be used fails fast with exit 2, before any command
+    # runs -- even one like specs that never touches a provider.
+    # The provider chain itself stays lazy; it is built when a
+    # command first asks for it, so a run that never consults a
+    # model never probes an endpoint.
+    try:
+        settings_module.load_settings()
+    except settings_module.SettingsError as error:
+        print(f"settings error: {error}", file=sys.stderr)
+        return EXIT_USAGE
+
     if args.history_file is None:
         args.history_file = Path(os.environ.get(history_module.HISTORY_ENV)
                                  or history_module.DEFAULT_HISTORY)
@@ -1266,11 +1363,22 @@ def main(argv: list[str] | None = None) -> int:
         "setup": cmd_setup,
     }
 
-    if args.command is None:
-        # No command: a terminal gets the interactive app, a pipe gets a
-        # question loop -- one answer per line.
-        return cmd_interactive(args, reporter)
-    return handlers[args.command](args, reporter)
+    try:
+        if args.command is None:
+            # No command: a terminal gets the interactive app, a pipe gets a
+            # question loop -- one answer per line.
+            return cmd_interactive(args, reporter)
+        return handlers[args.command](args, reporter)
+    except settings_module.SettingsError as error:
+        # Backstop: settings are validated at launch (above), but
+        # commands still load and save settings themselves -- the
+        # settings menu, onboarding, setup. A failure there is
+        # reported the same way: the one line that says which
+        # file to fix, and exit 2. In the interactive session
+        # this also means the session ends; a broken config.json
+        # is not something to keep running on.
+        print(f"settings error: {error}", file=sys.stderr)
+        return EXIT_USAGE
 
 
 if __name__ == "__main__":

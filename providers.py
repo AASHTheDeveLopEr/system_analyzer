@@ -114,14 +114,17 @@ PAID_MODEL = "jev-latest"
 def zen_provider(config: settings_module.Settings) -> dict:
     """The free Zen endpoint, anonymous unless a key is set."""
     free_key = config.get("zen_api_key").strip()
-    # Anonymous callers are accepted, so a missing key is not an error.
+    # Anonymous callers are accepted, so a missing key is not an error:
+    # the header is omitted rather than filled with a fabricated token
+    # ("Bearer public" is a credential Zen never issued). Zen's docs
+    # make the key optional.
     # Note that the probe prints these dicts: never put the key in one.
     return {
         "name": "jev-free",
         "url": FREE_URL,
         "model": FREE_MODEL,
         "source": "free",
-        "auth": f"Bearer {free_key}" if free_key else "Bearer public",
+        "auth": f"Bearer {free_key}" if free_key else "",
     }
 
 

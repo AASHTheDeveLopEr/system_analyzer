@@ -170,6 +170,55 @@ class BottleneckTests(unittest.TestCase):
         self.assertIn("model", payload)
 
 
+class ReportableFloorTests(unittest.TestCase):
+    """``min_reportable_confidence`` labels weak verdicts, it does not hide them.
+
+    The floor is dead config unless a verdict computed below it is told
+    apart from a confident one: the band and the number stay identical,
+    and the note plus the ``low_confidence`` flag are what change.
+    """
+
+    def test_a_verdict_below_the_floor_is_called_a_guess(self) -> None:
+        # A coin flip earns no strength credit, so confidence is
+        # second_confidence * 0.5 = 15, under the 20 floor.
+        verdict = verdict_for(capability_answers(0.5, second_confidence=30.0))
+        self.assertLess(verdict.confidence, Config().min_reportable_confidence)
+        self.assertTrue(verdict.low_confidence)
+        self.assertTrue(any("reportable floor" in note for note in verdict.notes))
+        self.assertTrue(verdict.to_dict()["low_confidence"])
+
+    def test_a_disagreement_can_push_an_answer_below_the_floor(self) -> None:
+        # 0.55 is inside the uncertain margin, the second opinion
+        # disagrees, and 30 * 0.5625 - 15 leaves confidence at 2.
+        verdict = verdict_for(
+            capability_answers(0.55, second="no", second_confidence=30.0)
+        )
+        self.assertLess(verdict.confidence, Config().min_reportable_confidence)
+        self.assertTrue(verdict.low_confidence)
+
+    def test_a_confident_verdict_is_not_flagged(self) -> None:
+        verdict = verdict_for(capability_answers(0.97, second_confidence=95.0))
+        self.assertGreaterEqual(verdict.confidence, Config().min_reportable_confidence)
+        self.assertFalse(verdict.low_confidence)
+        self.assertFalse(verdict.to_dict()["low_confidence"])
+        self.assertFalse(any("reportable floor" in note for note in verdict.notes))
+
+    def test_the_floor_labels_without_changing_the_verdict(self) -> None:
+        # Same answers with the floor at zero: only the flag differs.
+        floor = verdict_for(capability_answers(0.5, second_confidence=30.0))
+        no_floor = verdict_for(
+            capability_answers(0.5, second_confidence=30.0),
+            config=Config({"min_reportable_confidence": 0}),
+        )
+        self.assertEqual(floor.verdict, no_floor.verdict)
+        self.assertEqual(floor.confidence, no_floor.confidence)
+        self.assertTrue(floor.low_confidence)
+        self.assertFalse(no_floor.low_confidence)
+
+    def test_the_floor_is_still_exposed_in_the_config(self) -> None:
+        self.assertIn("min_reportable_confidence", Config().to_dict())
+
+
 class ConfidenceScaleTests(unittest.TestCase):
     """The live endpoint sends ``confidence`` as a 0..1 fraction, not a percent.
 

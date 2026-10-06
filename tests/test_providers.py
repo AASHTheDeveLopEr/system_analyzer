@@ -334,6 +334,35 @@ class OllamaProviderTests(TempDir):
         self.assertEqual(provider["auth"], "")
 
 
+class ZenProviderTests(IsolatedSettings):
+    """The free Zen endpoint: anonymous unless a key is set."""
+
+    def setUp(self):
+        super().setUp()
+        self.environ = mock.patch.dict(os.environ, {}, clear=False)
+        self.environ.start()
+        os.environ.pop(settings.ZEN_KEY_ENV, None)
+
+    def tearDown(self):
+        self.environ.stop()
+
+    def test_without_a_key_the_auth_is_empty(self):
+        """Anonymous callers are accepted, so a missing key is not
+        an error: the header is omitted rather than filled with a
+        fabricated token ("Bearer public" is a credential Zen
+        never issued)."""
+        config = settings.load_settings()
+        provider = providers.zen_provider(config)
+        self.assertEqual(provider["auth"], "")
+
+    def test_a_key_is_sent_as_the_bearer_token(self):
+        """The key is read anyway, so the tool survives the day
+        the open tier closes to anonymous callers."""
+        os.environ[settings.ZEN_KEY_ENV] = "zen-test"
+        provider = providers.zen_provider(settings.load_settings())
+        self.assertEqual(provider["auth"], "Bearer zen-test")
+
+
 class ChainOptInTests(IsolatedSettings):
     """Cloud escalation must stay off unless the user asked for it."""
 
@@ -369,7 +398,9 @@ class ChainOptInTests(IsolatedSettings):
     def test_free_works_without_a_key(self):
         endpoints, _ = providers.chain()
         self.assertEqual(endpoints[0]["name"], "jev-free")
-        self.assertEqual(endpoints[0]["auth"], "Bearer public")
+        # No key means no auth header: "Bearer public" would be a
+        # credential Zen never issued.
+        self.assertEqual(endpoints[0]["auth"], "")
 
     def test_a_free_key_is_used_when_present(self):
         """So the tool survives the day the open tier closes."""

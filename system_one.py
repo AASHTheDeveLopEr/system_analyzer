@@ -375,6 +375,7 @@ def _selftest() -> int:
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1
 
+
 def _probe(repeats: int = 1) -> int:
     """One real Jev call: confirms the wiring reaches the endpoint.
 
@@ -410,7 +411,10 @@ def _probe(repeats: int = 1) -> int:
         score, _legend, _probabilities, confidence = decision.score("tier")
         scores.append(score)
         confidences.append(confidence)
-        print(f"  run {attempt}/{repeats}: noul={nouls[-1]:.3f}  score={score:.2f}  confidence={confidence:.2f}")
+        print(
+            f"  run {attempt}/{repeats}: noul={nouls[-1]:.3f}  "
+            f"score={score:.2f}  confidence={confidence:.2f}"
+        )
 
     print(f"\nanswered by  : {decision.provider} ({decision.source})")
     print(f"model        : {decision.model}")

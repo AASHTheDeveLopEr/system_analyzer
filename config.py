@@ -16,8 +16,8 @@ fails loudly instead of silently keeping a default you thought you changed.
 
 These are *starting points*, not blessed product values. The weights in
 particular encode a judgement about what a general-purpose 0-100 rating should
-reward, and that judgement has not been made by anybody yet. They are in a file so that arguing about them is a
-diff, not a code change.
+reward, and that judgement has not been made by anybody yet. They are in a
+file so that arguing about them is a diff, not a code change.
 """
 
 from __future__ import annotations
@@ -26,6 +26,8 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+
+import rankings
 
 CONFIG_ENV = "SYSTEM_ANALYZER_CONFIG"
 
@@ -64,12 +66,12 @@ UNCERTAIN_CONFIDENCE_CAP = 45
 #: same request disagree. Disagreement is evidence of a shaky answer.
 DISAGREEMENT_PENALTY = 15
 
-#: Minimum confidence a verdict must have to be shown as a plain verdict at
-#: all; below this the user is told the answer is a guess.
+#: Minimum confidence a verdict needs to be shown as a plain verdict;
+#: below this the verdict is labelled a guess, not hidden -- the band
+#: stays the same, and a note says to treat it as a guess.
 MIN_REPORTABLE_CONFIDENCE = 20
 
-#: Allowed confidence drift across repeated identical questions, in points
-#:.
+#: Allowed confidence drift across repeated identical questions, in points.
 STABILITY_TOLERANCE = 5
 
 # --------------------------------------------------------------------------
@@ -95,6 +97,14 @@ MIN_FACTORS = 3
 
 #: A component scoring below this is called out as a bottleneck in verdicts.
 BOTTLENECK_SCORE = 45
+
+#: The curated capability tables (rankings.GPU_RANKINGS and
+#: friends) can be replaced through the config file, which is
+#: how a corrected score ships without a code change. The
+#: version string dates whichever ordering is in force.
+GPU_RANKINGS_KEY = "gpu_rankings"
+CPU_RANKINGS_KEY = "cpu_rankings"
+RANKINGS_VERSION_KEY = "rankings_version"
 
 # --------------------------------------------------------------------------
 # Component scoring curves
@@ -215,6 +225,7 @@ class Config:
             "min_factors": self.min_factors,
             "bottleneck_score": self.bottleneck_score,
             "rating_tiers": list(self.rating_tiers),
+            "rankings_version": self.rankings_version,
         }
 
     # Derived accessors, so the rest of the code never indexes a dict directly.
@@ -258,6 +269,26 @@ class Config:
     def rating_tiers(self) -> tuple[str, ...]:
         return tuple(self.get("rating_tiers", RATING_TIERS))
 
+    @property
+    def gpu_rankings(self) -> tuple[tuple[str, float], ...]:
+        """The GPU capability table in force."""
+        return self._rankings(GPU_RANKINGS_KEY, rankings.GPU_RANKINGS)
+
+    @property
+    def cpu_rankings(self) -> tuple[tuple[str, float], ...]:
+        """The CPU capability table in force."""
+        return self._rankings(CPU_RANKINGS_KEY, rankings.CPU_RANKINGS)
+
+    @property
+    def rankings_version(self) -> str:
+        """The date of the ordering in force, e.g. "2026-10"."""
+        return rankings.rankings_version(self)
+
+    def _rankings(
+        self, key: str, default: tuple[tuple[str, float], ...]
+    ) -> tuple[tuple[str, float], ...]:
+        return rankings.effective_table(key, default, self)
+
     def weights(self) -> dict[str, float]:
         return {k: float(v) for k, v in self.get("rating_weights", RATING_WEIGHTS).items()}
 
@@ -291,6 +322,24 @@ class Config:
         if not 0.0 <= self.uncertain_margin <= 0.5:
             raise ConfigError("uncertain_margin must be between 0 and 0.5")
 
+        # The floor is a count of percentage points, so it has to be
+        # a whole number on the 0-100 scale. Checking it here turns
+        # "twenty" into a config error (exit 2) instead of a traceback
+        # the first time the property is read, and stops -5 (which
+        # would flag nothing) and 500 (which would flag everything)
+        # from silently changing what every verdict looks like.
+        floor = self.get("min_reportable_confidence", MIN_REPORTABLE_CONFIDENCE)
+        if isinstance(floor, bool) or not isinstance(floor, int):
+            raise ConfigError(
+                f"min_reportable_confidence must be an integer between "
+                f"0 and 100, got {floor!r}"
+            )
+        if not 0 <= floor <= 100:
+            raise ConfigError(
+                f"min_reportable_confidence must be between 0 and 100, "
+                f"got {floor}"
+            )
+
         for name, curve in (
             ("cpu", self.curve("cpu")),
             ("memory", self.curve("memory")),
@@ -306,6 +355,15 @@ class Config:
         tiers = self.rating_tiers
         if len(tiers) < 2:
             raise ConfigError("rating_tiers needs at least 2 levels to be a scale")
+
+        for key in (GPU_RANKINGS_KEY, CPU_RANKINGS_KEY):
+            override = self.get(key)
+            if override is None:
+                continue
+            try:
+                rankings.validate_table(override)
+            except ValueError as error:
+                raise ConfigError(f"{key}: {error}") from error
 
 
 _DEFAULT_CURVES = {
@@ -365,4 +423,7 @@ def _known_keys() -> set[str]:
         "memory_curve",
         "gpu_curve",
         "storage_curve",
+        GPU_RANKINGS_KEY,
+        CPU_RANKINGS_KEY,
+        RANKINGS_VERSION_KEY,
     }
