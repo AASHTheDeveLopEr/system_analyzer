@@ -1,10 +1,17 @@
 """The provider catalog: who can answer, where they live, and how to find out.
 
-Three providers speak the same wire format (see ``system_one``):
+Four providers speak the same wire format (see ``system_one``):
 
     ollama     decision models served by Ollama on this machine -- local
     zen        OpenCode Zen's free Jev tier -- remote, the default
     typesafe   TypeSafe's paid Jev -- remote, joins only when asked for
+    openrouter OpenRouter's hosted System One models -- remote, opt-in key
+
+OpenRouter is a gateway rather than a model vendor: it serves System One
+models from several vendors under one key, so its model is a setting instead
+of a constant. Everything it forwards leaves this machine, and ``state`` is
+sent onward to the upstream vendor, so it is opt-in like any other remote
+provider.
 
 This module owns everything about providers: their endpoints and keys, the
 provider chain that decides who is asked and in what order, Ollama discovery,
@@ -33,7 +40,7 @@ import requests
 
 import settings as settings_module
 
-PROVIDER_IDS = ("ollama", "zen", "typesafe")
+PROVIDER_IDS = ("ollama", "zen", "typesafe", "openrouter")
 
 OLLAMA_HOST_ENV = "OLLAMA_HOST"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
@@ -52,10 +59,39 @@ OLLAMA_TIMEOUT_SECONDS = 120.0
 
 PAID_MODELS_URL = "https://api.typesafe.ai/v1/models"
 
+#: OpenRouter's System One surface. The other one it offers,
+#: ``/api/alpha/decisions``, carries the same request and response bodies;
+#: this path is chosen because it is byte-for-byte the same wire the direct
+#: TypeSafe endpoint speaks, so it needs no adapter and no second decoder.
+OPENROUTER_URL = "https://openrouter.ai/api/v1/systemone"
+
+#: OpenRouter's public model index, narrowed to decision models. The
+#: ``output_modalities`` filter is documented and load-bearing: omitting it
+#: returns *text-output models only*, so decision models like Jev are absent
+#: from the default response. Unlike the other providers this needs no key.
+OPENROUTER_MODELS_URL = (
+    "https://openrouter.ai/api/v1/models?output_modalities=decisions"
+)
+
+#: The modality a System One model reports for its output. Verified against
+#: the live catalog: every decision model carries ``"text->decisions"`` and
+#: ``output_modalities: ["decisions"]``.
+OPENROUTER_DECISION_MODALITY = "decisions"
+
+#: Offered when the catalog cannot be listed (no network, or the index shape
+#: changed). Both entries are confirmed present in the live decisions catalog.
+#: This is deliberately short: a model id guessed from a blog post would send
+#: the user to an endpoint that does not exist.
+OPENROUTER_SYSTEM_ONE_MODELS = (
+    settings_module.OPENROUTER_DEFAULT_MODEL,
+    "~typesafe/jev-latest",
+)
+
 PROVIDER_LABELS = {
     "ollama": "Ollama -- runs on this machine, private, works offline",
     "zen": "OpenCode Zen -- free, runs online, no key needed",
     "typesafe": "TypeSafe -- paid, runs online, needs a key",
+    "openrouter": "OpenRouter -- paid, runs online, one key for many models",
 }
 
 
@@ -120,6 +156,27 @@ def paid_provider(
     }, ""
 
 
+def openrouter_provider(config: settings_module.Settings) -> tuple[dict | None, str]:
+    """The OpenRouter endpoint, plus a reason when it is out of the chain.
+
+    Unlike TypeSafe, listing OpenRouter in the provider chain is the whole
+    opt-in: there is no separate escalation flag to set, because there is no
+    legacy path that could quietly add it. A missing key is still a skip --
+    a gateway with no key cannot answer, and saying so beats a 401 later.
+    """
+    api_key = config.get("openrouter_api_key").strip()
+    if not api_key:
+        return None, f"{settings_module.OPENROUTER_KEY_ENV} is not set"
+    return {
+        "name": "openrouter",
+        "url": OPENROUTER_URL,
+        "model": config.get("openrouter_model").strip() or settings_module.OPENROUTER_DEFAULT_MODEL,
+        "source": "openrouter",
+        # Note that the probe prints these dicts: never put the key in one.
+        "auth": f"Bearer {api_key}",
+    }, ""
+
+
 def chain() -> tuple[list[dict], list[str]]:
     """Endpoints to try in order, and the reasons the rest are out.
 
@@ -134,23 +191,24 @@ def chain() -> tuple[list[dict], list[str]]:
     # their own, the chain is the entire truth and the flag is ignored.
     legacy_backup = config.origin("provider_chain") == "default"
 
+    # One builder per id, keyed by id on purpose. An id list and a builder
+    # list that have to be kept in step by hand is how a new provider ends up
+    # silently answered by someone else's endpoint.
+    builders = {
+        "ollama": ollama_provider(config),
+        "zen": (zen_provider(config), ""),
+        "typesafe": paid_provider(config, explicit=True),
+        "openrouter": openrouter_provider(config),
+    }
+
     endpoints: list[dict] = []
     skipped: list[str] = []
     for pid in ordered:
-        if pid == "ollama":
-            provider, reason = ollama_provider(config)
-            if reason:
-                reason = f"ollama skipped: {reason}"
-        elif pid == "zen":
-            provider, reason = zen_provider(config), ""
-        else:  # config.chain() validates ids, so "typesafe" is the only case left
-            provider, reason = paid_provider(config, explicit=True)
-            if reason:
-                reason = f"typesafe skipped: {reason}"
+        provider, reason = builders.get(pid, (None, "no builder for this provider id"))
         if provider:
             endpoints.append(provider)
         elif reason:
-            skipped.append(reason)
+            skipped.append(f"{pid} skipped: {reason}")
 
     if legacy_backup:
         paid, reason = paid_provider(config)
@@ -311,6 +369,74 @@ def discover_typesafe(api_key: str, timeout: float = DISCOVERY_TIMEOUT) -> tuple
         if isinstance(entry, dict) and isinstance(entry.get("name"), str)
     ]
     return models, ""
+
+
+def _openrouter_system_one_ids(entries: object) -> list[str]:
+    """Model ids from the OpenRouter catalog that return typed decisions.
+
+    Recognition is a documented lookup, not a judgement. OpenRouter tags
+    decision models with the ``decisions`` output modality and documents
+    ``output_modalities=decisions`` as the way to list them, so the catalog is
+    asked for exactly that set.
+
+    The modality is still checked on each entry rather than trusting the query
+    parameter to have been honoured: if the parameter is ever dropped or
+    renamed, an unchecked response would offer hundreds of chat models as
+    though they could answer a System One question. A chat model asked to
+    answer one fails every time, so a missing filter has to fail closed here.
+
+    What is deliberately *not* used as a signal: billing. Zero-cost output
+    looked like a tidy marker for a model that returns no text, but the live
+    catalog holds 29 models priced that way -- ``:free`` chat models, a
+    zero-priced Llama flash -- and every one of them would have been offered
+    as a decision model.
+    """
+    if not isinstance(entries, list):
+        return []
+
+    ids: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        model_id = entry.get("id")
+        if not isinstance(model_id, str) or not model_id:
+            continue
+        architecture = entry.get("architecture")
+        modalities = (
+            architecture.get("output_modalities")
+            if isinstance(architecture, dict)
+            else None
+        )
+        if isinstance(modalities, list) and OPENROUTER_DECISION_MODALITY in modalities:
+            ids.append(model_id)
+    return ids
+
+
+def discover_openrouter(timeout: float = DISCOVERY_TIMEOUT) -> tuple[list[str] | None, str]:
+    """OpenRouter's System One models, or ``None`` and why they could not be listed.
+
+    No key is sent: the catalog is public, and listing what exists must not
+    require the secret the provider will later be asked to spend. A key is
+    not proof the account can reach a model either -- routing and credits
+    decide that, and a 4xx at ask time is where it shows up.
+    """
+    try:
+        response = requests.get(OPENROUTER_MODELS_URL, timeout=timeout)
+    except requests.RequestException as error:
+        return None, f"request failed: {error}"
+
+    if response.status_code in (401, 403):
+        return None, f"the catalog was rejected (HTTP {response.status_code})"
+    if response.status_code != 200:
+        return None, f"HTTP {response.status_code}"
+
+    try:
+        body = response.json()
+    except ValueError:
+        return None, "the answer was not JSON"
+    if not isinstance(body, dict) or not isinstance(body.get("data"), list):
+        return None, "unexpected response shape"
+    return _openrouter_system_one_ids(body["data"]), ""
 
 
 def ollama_provider(config: settings_module.Settings) -> tuple[dict | None, str]:

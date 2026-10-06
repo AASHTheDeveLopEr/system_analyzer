@@ -58,7 +58,7 @@ Shared flags: `--json`, `--config`, `--history-file`, `--no-history`. Each comma
 - Interactive menu and one-question-per-line pipe mode
 - 0–100 rating with a rule-only fallback when no endpoint answers
 - Requirement checklists: numbers checked locally, named parts judged by the model
-- Provider chain: Ollama, Zen, and TypeSafe
+- Provider chain: Ollama, Zen, TypeSafe, and OpenRouter
 - JSON output on stdout and human hints on stderr
 - Local history and git-ignored settings
 
@@ -72,7 +72,7 @@ Shared flags: `--json`, `--config`, `--history-file`, `--no-history`. Each comma
 | `inventory.py` | Hardware detection only |
 | `system_one.py` | Request validation, HTTP transport, failover, typed answers |
 | `judgment.py` | Measured facts plus model answers, as a 0–100 rating |
-| `providers.py` | Provider catalog, chain, Ollama discovery |
+| `providers.py` | Provider catalog, chain, Ollama and OpenRouter discovery |
 | `requirements.py` | Pasted requirement checklists |
 | `settings.py` | `config.json`, `.env`, menus, and precedence |
 | `history.py` | Local question log |
@@ -173,12 +173,18 @@ The provider chain is an ordered list in `config.json`. A provider left out of t
 | `ollama` | This machine, offline | none |
 | `zen` | OpenCode Zen, online | optional |
 | `typesafe` | Paid, online | `TYPESAFE_API_KEY` |
+| `openrouter` | Paid gateway, online | `OPENROUTER_API_KEY` |
 
 The default chain is `zen` alone. Ollama is local at `http://localhost:11434` unless `OLLAMA_HOST` or `SYSTEM_ANALYZER_OLLAMA_URL` says otherwise. The app does not install models. A local decision model can be added with:
 
 ```bash
 ollama pull tev1:0.8b
 ```
+
+OpenRouter is a gateway rather than a model vendor: one key reaches decision models from several vendors, so the model is a setting (`SYSTEM_ANALYZER_OPENROUTER_MODEL`, default `typesafe/jev-1.13`). Requests go to `POST https://openrouter.ai/api/v1/systemone`, which speaks the same wire as TypeSafe, so no extra adapter is involved. Two things to know:
+
+- **The payload leaves this machine** and is forwarded on to whichever vendor serves the model. True of every online provider here, but OpenRouter adds a second party.
+- **Listing the models sends no key.** OpenRouter's catalog returns text-output models only unless asked otherwise, so decision models are missing from the default listing. Setup asks for `output_modalities=decisions` and then checks each model's own `decisions` output modality, so the list cannot quietly fill up with chat models that cannot answer a typed question.
 
 Settings precedence:
 

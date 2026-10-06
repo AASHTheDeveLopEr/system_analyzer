@@ -69,7 +69,7 @@ inventory.py ──detect──▶ main.py ──ask──▶ system_one.py
 | `inventory.py` | Hardware only: CPU, RAM, GPU/VRAM, disks, OS |
 | `system_one.py` | Request validation, HTTP failover, typed answers |
 | `judgment.py` | Facts plus model answers, as a 0–100 rating |
-| `providers.py` | Endpoint catalog, chain, Ollama discovery |
+| `providers.py` | Endpoint catalog, chain, Ollama and OpenRouter discovery |
 | `requirements.py` | Pasted checklists and tiered verdicts |
 | `settings.py` | `config.json`, `.env`, precedence, masking |
 | `history.py` | Local question log |
@@ -169,6 +169,7 @@ The chain is an ordered list. A provider left out of it is never contacted.
 | `ollama` | This machine, offline | none |
 | `zen` | OpenCode Zen, online | optional |
 | `typesafe` | Paid, online | `TYPESAFE_API_KEY` |
+| `openrouter` | Paid gateway, online | `OPENROUTER_API_KEY` |
 
 The default chain is `zen` alone. Ollama is discovery-driven: installed decision models come from `/api/tags`. The app does not install models. If none are installed, the advice is:
 
@@ -177,6 +178,14 @@ ollama pull tev1:0.8b
 ```
 
 Local models get 120 seconds per question. Cloud endpoints get 30.
+
+OpenRouter is a gateway, not a vendor: one key reaches decision models from several vendors, so the model is a setting (`SYSTEM_ANALYZER_OPENROUTER_MODEL`, default `typesafe/jev-1.13`). It is a member of the chain like any other — a key alone contacts nothing. The payload leaves this machine and is forwarded on to the upstream vendor.
+
+OpenRouter's catalog returns text-output models only unless asked otherwise, so decision models are absent from the default listing. `discover_openrouter` asks for `?output_modalities=decisions` and then checks `architecture.output_modalities` on each entry, so the list fails closed if that parameter is ever dropped or renamed. Billing is deliberately not used as a signal: 29 live models are priced at zero for output (`:free` chat models, a zero-priced Llama flash) and would all have been offered as decision models. Listing the catalog sends no key.
+
+OpenRouter reports `cost` nested under `usage` rather than at the top level, so `system_one` reads both, checking for `None` rather than falsiness — a real free-tier cost is `0.0`.
+
+Chain building is a dispatch table keyed by provider id. Keeping an id list and a branch list in step by hand is how a new provider ends up silently answered by the wrong endpoint.
 
 Settings precedence: environment variable, then `.env`, then `config.json`, then the built-in default. Secrets are masked in anything printed.
 

@@ -212,6 +212,28 @@ class ChainValidationTests(TempDir):
             settings.validate_chain("zen,openai")
         self.assertIn("known providers", str(caught.exception))
 
+    def test_openrouter_is_a_known_provider(self):
+        self.assertEqual(settings.validate_chain("zen,openrouter"), ["zen", "openrouter"])
+
+    def test_the_openrouter_key_is_declared_as_a_secret(self):
+        """save_env writes to .env, so an unmarked secret would leak on disk."""
+        self.assertTrue(settings._BY_ENV[settings.OPENROUTER_KEY_ENV].secret)
+        with self.assertRaises(settings.SettingsError):
+            settings.save_env(settings.PROVIDERS_ENV, "zen", self.tmp)
+
+    def test_an_openrouter_chain_with_no_key_loads_cleanly(self):
+        """A missing key is a skip later, not a settings error."""
+        self.write("config.json", json.dumps({"provider_chain": "openrouter"}))
+        loaded = settings.load_settings(self.tmp)
+        self.assertEqual(loaded.chain(), ["openrouter"])
+        self.assertEqual(loaded.get("openrouter_api_key"), "")
+
+    def test_the_openrouter_model_defaults_to_the_known_good_one(self):
+        self.assertEqual(
+            settings.load_settings(self.tmp).get("openrouter_model"),
+            settings.OPENROUTER_DEFAULT_MODEL,
+        )
+
 
 class ConfiguredTests(TempDir):
     def test_fresh_and_unconfigured(self):

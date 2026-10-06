@@ -318,15 +318,25 @@ class SystemOneClient:
                 failures.append(f"{provider['name']}: {failure}")
                 continue
 
+            usage = decoded.get("usage")
+            if not isinstance(usage, dict):
+                usage = {}
+            cost = _as_float(decoded.get("cost"))
+            if cost is None:
+                cost = _as_float(usage.get("cost"))
             return Decision(
                 model=decoded.get("model") or provider["model"],
                 answers=decoded.get("answers") or {},
                 provider=provider["name"],
                 source=provider["source"],
-                usage=decoded.get("usage") or {},
-                # The free endpoint sends this as the *string* "0", not a
-                # number, so read it as a number or report nothing at all.
-                cost=_as_float(decoded.get("cost")),
+                usage=usage,
+                # Cost is not in the same place on every endpoint: the free
+                # endpoint and TypeSafe send it top-level (as the *string*
+                # "0"), while OpenRouter nests it under `usage`. Each place is
+                # read as a number or left as None -- the fallback tests for
+                # None rather than for falsiness, because a real cost of 0.0
+                # is the normal answer on the free tier and must survive it.
+                cost=cost,
             )
 
         raise SystemOneError("every System One endpoint failed: " + " | ".join(failures))

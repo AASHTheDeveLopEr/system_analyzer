@@ -185,6 +185,49 @@ class CostTests(unittest.TestCase):
             self.assertIsNone(system_one._as_float(value))
 
 
+class CostPlacementTests(unittest.TestCase):
+    """Endpoints disagree about where cost lives, so both places are read.
+
+    OpenRouter nests it under ``usage``; the free endpoint and TypeSafe send
+    it top-level, as a string. A user with billing switched on needs the real
+    number from whichever endpoint answered, and needs silence when neither
+    place carried one.
+    """
+
+    def _cost_from(self, body):
+        provider = {"name": "p", "url": "https://x.example", "model": "m",
+                    "source": "s", "auth": "Bearer k"}
+        client = SystemOneClient([provider])
+        with mock.patch.object(system_one, "_post_json", return_value=body):
+            return client.ask(STATE, {"q": question(type="noul")}).cost
+
+    def test_cost_nested_under_usage_is_found(self):
+        """OpenRouter's shape."""
+        body = {"answers": {}, "usage": {"input_tokens": 476, "cost": 0.000019992}}
+        self.assertAlmostEqual(self._cost_from(body), 0.000019992)
+
+    def test_a_string_zero_cost_survives_the_fallback(self):
+        """A real free-tier cost is 0.0, which is falsy.
+
+        Reading the fallback with ``or`` would swallow it and report no cost
+        at all -- the answer would be wrong in the direction of hiding a real
+        number.
+        """
+        body = {"answers": {}, "cost": "0"}
+        self.assertEqual(self._cost_from(body), 0.0)
+
+    def test_a_top_level_cost_wins_over_usage(self):
+        body = {"answers": {}, "cost": 1.5, "usage": {"cost": 2.5}}
+        self.assertEqual(self._cost_from(body), 1.5)
+
+    def test_no_cost_anywhere_is_reported_as_absent(self):
+        """Not zero: absent. A guessed 0.0 would be a claim about someone's bill."""
+        self.assertIsNone(self._cost_from({"answers": {}}))
+
+    def test_a_non_dict_usage_does_not_crash_the_decode(self):
+        self.assertIsNone(self._cost_from({"answers": {}, "usage": "nope"}))
+
+
 class ErrorMessageTests(unittest.TestCase):
     """The endpoints do not share an error envelope; both shapes must be read."""
 

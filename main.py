@@ -864,11 +864,19 @@ def _onboarding_flow(reporter: Reporter, first_run: bool) -> int:
     if "typesafe" in chain and not settings.get("typesafe_api_key"):
         _ask_typesafe_key(reporter)
 
+    openrouter_model = settings.get("openrouter_model")
+    if "openrouter" in chain:
+        if not settings.get("openrouter_api_key"):
+            _ask_openrouter_key(reporter)
+        openrouter_model = _ask_openrouter_model(reporter, settings)
+
     values: dict[str, Any] = {"provider_chain": ",".join(chain)}
     if "ollama" in chain:
         values["ollama_model"] = ollama_model
     if ollama_url:
         values["ollama_url"] = ollama_url
+    if "openrouter" in chain and openrouter_model:
+        values["openrouter_model"] = openrouter_model
     try:
         path = settings_module.save_config(values)
     except settings_module.SettingsError as error:
@@ -891,7 +899,7 @@ def _ask_chain(reporter: Reporter) -> list[str]:
     numbering always agrees with what Enter does.
     """
     ids = providers_module.PROVIDER_IDS
-    order = [pid for pid in ("zen", "ollama", "typesafe") if pid in ids]
+    order = [pid for pid in ("zen", "ollama", "typesafe", "openrouter") if pid in ids]
     reporter.say("")
     reporter.say("  Who should answer your questions, in order of preference?")
     for number, pid in enumerate(order, 1):
@@ -970,6 +978,68 @@ def _ask_typesafe_key(reporter: Reporter) -> None:
         reporter.say(f"  Could not save the key: {error}")
         return
     reporter.say("  Key saved to .env.")
+
+
+def _ask_openrouter_key(reporter: Reporter) -> None:
+    """Collect the OpenRouter key into .env; a stored key alone enables nothing."""
+    reporter.say("")
+    reporter.say("  OpenRouter is a gateway: it forwards your request to whichever")
+    reporter.say("  vendor serves the model, so the hardware facts you send pass")
+    reporter.say("  through OpenRouter as well as that vendor.")
+    reporter.say("  The key is stored in .env, never displayed.")
+    key = _secret_prompt("  OpenRouter API key (Enter to leave unset): ")
+    if not key:
+        reporter.say("  No key set: OpenRouter will be skipped until one is saved.")
+        return
+    try:
+        settings_module.save_env("OPENROUTER_API_KEY", key)
+    except settings_module.SettingsError as error:
+        reporter.say(f"  Could not save the key: {error}")
+        return
+    reporter.say("  Key saved to .env.")
+
+
+def _ask_openrouter_model(reporter: Reporter, settings: Any) -> str:
+    """Pick which System One model OpenRouter should answer with.
+
+    The catalog is public, so this is asked without spending the key. When it
+    cannot be listed, the known-good models are offered instead of blocking
+    setup on a network call. OpenRouter publishes no capability tag for
+    decision models, so the list is a shortlist to confirm, not a guarantee.
+    """
+    configured = settings.get("openrouter_model").strip()
+    models, reason = providers_module.discover_openrouter()
+
+    if models is None:
+        reporter.say("")
+        reporter.say(f"  Could not list OpenRouter's models ({reason}).")
+        models = list(providers_module.OPENROUTER_SYSTEM_ONE_MODELS)
+    elif not models:
+        # A listing that matched nothing is not a reason to offer an empty
+        # menu, and it must not index into an empty list either.
+        reporter.say("")
+        reporter.say("  No System One models were recognized in the OpenRouter catalog.")
+        reporter.say("  Offering the known ones instead; type an id to use another.")
+        models = list(providers_module.OPENROUTER_SYSTEM_ONE_MODELS)
+
+    reporter.say("")
+    reporter.say("  Which System One model should OpenRouter answer with?")
+    for number, model_id in enumerate(models, 1):
+        reporter.say(f"    {number}. {model_id}")
+    reporter.say("  OpenRouter bills the model you pick; a pinned id keeps answers stable.")
+    default = models.index(configured) + 1 if configured in models else 1
+
+    while True:
+        answer = _prompt(
+            f"  1-{len(models)}, by number or id (Enter for {models[default - 1]}): "
+        )
+        if not answer:
+            return models[default - 1]
+        if answer in models:
+            return answer
+        if answer.isdigit() and 1 <= int(answer) <= len(models):
+            return models[int(answer) - 1]
+        reporter.say("  Pick one of the numbers or ids above.")
 
 
 def _settings_menu(reporter: Reporter) -> int:
