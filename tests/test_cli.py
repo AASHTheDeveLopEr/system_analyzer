@@ -446,20 +446,20 @@ class SettingsErrorTests(TempDir):
         return code, out.getvalue(), err.getvalue()
 
     def test_an_unknown_key_in_config_json_is_exit_two_not_a_traceback(self) -> None:
-        self.write("config.json", json.dumps({"openrouter_model": "some-model"}))
+        self.write("config.json", json.dumps({"no_such_setting": "some-model"}))
         code, out, err = self.run_cli("rate")
         self.assertEqual(code, cli.EXIT_USAGE)
         self.assertEqual(out, "")
         self.assertIn("settings error", err)
-        self.assertIn("openrouter_model", err)
+        self.assertIn("no_such_setting", err)
 
     def test_an_unknown_provider_id_in_the_chain_is_exit_two(self) -> None:
-        self.write("config.json", json.dumps({"provider_chain": "openrouter"}))
+        self.write("config.json", json.dumps({"provider_chain": "no_such_provider"}))
         code, out, err = self.run_cli("rate")
         self.assertEqual(code, cli.EXIT_USAGE)
         self.assertEqual(out, "")
         self.assertIn("settings error", err)
-        self.assertIn("openrouter", err)
+        self.assertIn("no_such_provider", err)
 
     def test_a_valid_config_json_still_works(self) -> None:
         self.write("config.json", json.dumps({"provider_chain": "zen"}))
@@ -476,12 +476,12 @@ class SettingsErrorTests(TempDir):
         # settings load would never run it. Settings are
         # validated at launch: the broken file fails fast
         # with exit 2 before any command starts.
-        self.write("config.json", json.dumps({"openrouter_model": "some-model"}))
+        self.write("config.json", json.dumps({"no_such_setting": "some-model"}))
         code, out, err = self.run_cli("specs")
         self.assertEqual(code, cli.EXIT_USAGE)
         self.assertEqual(out, "")
         self.assertIn("settings error", err)
-        self.assertIn("openrouter_model", err)
+        self.assertIn("no_such_setting", err)
         self.assertIn("config.json", err)
         self.assertNotIn("Traceback", err)
 
@@ -491,7 +491,7 @@ class SettingsErrorTests(TempDir):
         # settings again inside themselves (the client constructor,
         # the provider document, the settings menu, the session
         # loop, onboarding), and the launch check runs first.
-        self.write("config.json", json.dumps({"provider_chain": "openrouter"}))
+        self.write("config.json", json.dumps({"provider_chain": "no_such_provider"}))
         cases: list[tuple[list[str], str]] = [
             (["specs"], ""),
             (["rate"], ""),
