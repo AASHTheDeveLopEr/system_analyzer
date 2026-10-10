@@ -163,10 +163,10 @@ The curated GPU/CPU capability tables (`rankings.py`) can be replaced through th
 
 | Exit | Meaning |
 |---|---|
-| 0 | Answered, or a rules-only rating when the model is unavailable |
+| 0 | Answered |
 | 1 | The app itself failed |
 | 2 | Wrong usage, or an unreadable config file |
-| 3 | No System One endpoint answered |
+| 3 | No System One endpoint answered — a rules-only rating is degraded and exits 3 |
 | 4 | Specs cannot settle the question; no verdict was invented |
 
 ---
