@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/icon.png" width="128" alt="System Analyzer icon">
+
 # System Analyzer
 
 ### A terminal tool that reads this machine and asks if it can run a task
